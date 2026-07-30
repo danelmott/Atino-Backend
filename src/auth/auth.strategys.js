@@ -4,6 +4,8 @@ import { Strategy as jwtStrategy, ExtractJwt } from "passport-jwt";
 import { Strategy as localStrategy } from "passport-local";
 import { Strategy as googleStrategy } from "passport-google-oauth20";
 import bcrypt from 'bcrypt';
+import { findUserById, findUserByEmail, updateUserImage } from '../users/users.queries.js';
+import { findAccountsByUserId, linkGoogleAccountToUser, createUserWithGoogleAccount } from './auth.queries.js';
 
 
 /*FUNCTION FOR JWT STRATEGY*/
@@ -35,12 +37,12 @@ const jwtStrategyRefresh = () => {
             },
             async (payload, done) => {
                 try {
-                    const user = null /*crear querie*/
-                    
+                    const user = await findUserById(payload.userId)
+
                     if(!user) return done(null, false);
                     return done(null, payload);
-                    
-                } 
+
+                }
                 catch (error) {
                     return done(error, false)
                 }
@@ -55,28 +57,28 @@ const localStrategyFunction = () => {
             {
                 usernameField: 'email',
                 passwordField: 'password'
-            }
-        ),
-        async (email, password, done) => {
-            try {
-                const user = null //crear querie
-                
-                if(!user || !user.password) {
-                    return done(null, false, {message: 'credenciales invalidas'})
+            },
+            async (email, password, done) => {
+                try {
+                    const user = await findUserByEmail(email)
+
+                    if(!user || !user.password) {
+                        return done(null, false, {message: 'credenciales invalidas'})
+                    }
+
+                    const valid = await bcrypt.compare(password, user.password);
+
+                    if(!valid) return done(null, false, {message: 'Credenciales invalidas'});
+
+                    if(!user.email_verified) return done(null, false /*escribir error*/);
+
+                    return done(null, user);
                 }
-                
-                const valid = await bcrypt.compare(password, user.password);
-                
-                if(!valid) return done(null, false, {message: 'Credenciales invalidas'});
-                
-                if(!user.email_verified) return done(null, false /*escribir error*/);
-                
-                return done(null, user);
-            } 
-            catch (error) {
-                return done(error);
+                catch (error) {
+                    return done(error);
+                }
             }
-        }
+        )
     )
 }
 
@@ -95,27 +97,36 @@ const googleStrategyFunction = () => {
                     const googleImage = profile.photos?.[0]?.value ?? null;
 
                     // Caso 1: ¿Existe un usuario con ese email?
-                    const existingUser = null /*crear querie: buscar user por email junto con sus accounts*/
+                    const existingUser = await findUserByEmail(email)
 
                     if (existingUser) {
+                        existingUser.accounts = await findAccountsByUserId(existingUser.id)
+
                         const alreadyLinked = existingUser.accounts.some(
                             (a) => a.provider === 'GOOGLE'
                         );
 
                         if (alreadyLinked) {
                             if (googleImage && existingUser.image !== googleImage) {
-                                const updatedUser = null /*crear querie: actualizar image del user*/
+                                const updatedUser = await updateUserImage(existingUser.id, googleImage)
                                 return done(null, updatedUser);
                             }
                             return done(null, existingUser);
                         }
 
-                        const user = null /*crear querie: marcar email_verified=true, actualizar image si falta, y crear account (provider='GOOGLE', provider_account_id=profile.id) para existingUser.id*/
+                        const user = await linkGoogleAccountToUser({
+                            userId: existingUser.id,
+                            image: googleImage,
+                        })
                         return done(null, user);
                     }
 
                     // Caso 2: Usuario nuevo → crear usuario + cuenta Google juntos
-                    const user = null /*crear querie: crear user (email, name=profile.displayName, image=googleImage, email_verified=true) + account (provider='GOOGLE', provider_account_id=profile.id)*/
+                    const user = await createUserWithGoogleAccount({
+                        email,
+                        name: profile.displayName,
+                        image: googleImage,
+                    })
                     return done(null, user);
                 }
                 catch (error) {
