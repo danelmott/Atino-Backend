@@ -1,3 +1,5 @@
+-- Up Migration
+
 CREATE TYPE roles AS ENUM ('USER', 'ADMIN');
 CREATE TYPE auth_provider AS ENUM ('LOCAL', 'GOOGLE');
 
@@ -55,7 +57,7 @@ CREATE TABLE refresh_tokens (
     user_id    UUID        NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    
+
     CONSTRAINT fk_refresh_tokens_user
         FOREIGN KEY (user_id)
         REFERENCES users (id)
@@ -73,7 +75,7 @@ CREATE TABLE verification_codes (
     expires_at TIMESTAMPTZ NOT NULL,
     used_at    TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    
+
     CONSTRAINT fk_verification_codes_user
         FOREIGN KEY (user_id)
         REFERENCES users (id)
@@ -94,7 +96,7 @@ CREATE TABLE feedback_messages (
     message    TEXT        NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    
+
     CONSTRAINT fk_feedback_messages_user
         FOREIGN KEY (user_id)
         REFERENCES users (id)
@@ -116,12 +118,12 @@ CREATE TABLE feedback_answers (
     message             TEXT        NOT NULL,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    
+
     CONSTRAINT fk_feedback_answers_user
         FOREIGN KEY (user_id)
         REFERENCES users (id)
         ON DELETE CASCADE,
-    
+
     CONSTRAINT fk_feedback_answers_message
         FOREIGN KEY (answered_message_id)
         REFERENCES feedback_messages (id)
@@ -140,14 +142,14 @@ CREATE TABLE feedback_message_likes (
     message_id UUID        NOT NULL,
     user_id    UUID        NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    
+
     PRIMARY KEY (message_id, user_id),
-    
+
     CONSTRAINT fk_feedback_message_likes_message
         FOREIGN KEY (message_id)
         REFERENCES feedback_messages (id)
         ON DELETE CASCADE,
-    
+
     CONSTRAINT fk_feedback_message_likes_user
         FOREIGN KEY (user_id)
         REFERENCES users (id)
@@ -161,14 +163,14 @@ CREATE TABLE feedback_answer_likes (
     answer_id  UUID        NOT NULL,
     user_id    UUID        NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    
+
     PRIMARY KEY (answer_id, user_id),
-    
+
     CONSTRAINT fk_feedback_answer_likes_answer
         FOREIGN KEY (answer_id)
         REFERENCES feedback_answers (id)
         ON DELETE CASCADE,
-    
+
     CONSTRAINT fk_feedback_answer_likes_user
         FOREIGN KEY (user_id)
         REFERENCES users (id)
@@ -179,18 +181,43 @@ CREATE INDEX idx_feedback_answer_likes_user_id ON feedback_answer_likes (user_id
 
 
 
-/*ROUTES TABLES*/
+-- ============================================================
+--  ROUTES / LESSONS / QUIZZES
+-- ============================================================
+
 CREATE TABLE routes (
     id          UUID      PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at  TIMESTAMP DEFAULT now(),
-    rankend     FLOAT     DEFAULT(0.0),
+    rankend     FLOAT     DEFAULT (0.0)
 );
 
 CREATE TABLE lessons (
     id         UUID      PRIMARY KEY DEFAULT gen_random_uuid(),
-    created_at TIMESTAMP DEFAULT now(),
+    created_at TIMESTAMP DEFAULT now()
 );
 
 CREATE TABLE quizess (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid()
 );
+
+
+-- Down Migration
+
+DROP TABLE IF EXISTS quizess;
+DROP TABLE IF EXISTS lessons;
+DROP TABLE IF EXISTS routes;
+
+DROP TABLE IF EXISTS feedback_answer_likes;
+DROP TABLE IF EXISTS feedback_message_likes;
+DROP TABLE IF EXISTS feedback_answers;
+DROP TABLE IF EXISTS feedback_messages;
+
+DROP TABLE IF EXISTS verification_codes;
+DROP TABLE IF EXISTS refresh_tokens;
+DROP TABLE IF EXISTS accounts;
+DROP TABLE IF EXISTS users;
+
+DROP FUNCTION IF EXISTS set_updated_at();
+
+DROP TYPE IF EXISTS auth_provider;
+DROP TYPE IF EXISTS roles;
