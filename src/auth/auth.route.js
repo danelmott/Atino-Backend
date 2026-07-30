@@ -2,6 +2,7 @@ import { Router } from 'express';
 import passport from 'passport';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { validate } from '../lib/validate.js';
+import { requireRefresh } from '../lib/middlewares/auth.js';
 import { authSchema, loginSchema, validationAccountSchema, resendSchema } from './auth.schemas.js';
 import { register, login, verify, resend, refresh, logout, googleCallback } from './auth.controllers.js';
 
@@ -12,8 +13,8 @@ authRouter.post('/login', validate(loginSchema), asyncHandler(login));
 authRouter.post('/verify', validate(validationAccountSchema), asyncHandler(verify));
 authRouter.post('/resend', validate(resendSchema), asyncHandler(resend));
 
-authRouter.post('/refresh', passport.authenticate('jwt-refresh', { session: false, failWithError: true }), asyncHandler(refresh));
-authRouter.post('/logout', passport.authenticate('jwt-refresh', { session: false, failWithError: true }), asyncHandler(logout));
+authRouter.post('/refresh', requireRefresh, asyncHandler(refresh));
+authRouter.post('/logout', requireRefresh, asyncHandler(logout));
 
 authRouter.get('/google', passport.authenticate('google', { scope: ['profile', 'email'], session: false }));
 authRouter.get(

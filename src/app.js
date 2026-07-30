@@ -3,6 +3,7 @@ import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import { passportInit } from './auth/auth.strategys.js'
 import { authRouter } from './auth/auth.route.js'
+import { feedbackRouter } from './feedback/feedback.route.js'
 import { errorHandler } from './lib/errorHandler.js'
 import { logger } from './lib/logger.js'
 
@@ -15,5 +16,6 @@ app.use(express.json({limit: '1mb'}))
 passportInit();
 
 app.use('/auth', authRouter);
+app.use('/feedback', feedbackRouter);
 
 app.use(errorHandler);
