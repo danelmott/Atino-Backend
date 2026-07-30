@@ -25,6 +25,7 @@ import {
 
 export const feedbackRouter = Router();
 
+//RUTAS PROTEGIDAS POR LA AUTENTICACION
 feedbackRouter.use(requireAuth);
 
 feedbackRouter.get('/messages', validate(paginationQuerySchema, 'query'), asyncHandler(listMessages));
