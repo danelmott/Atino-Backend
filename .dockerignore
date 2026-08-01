@@ -1,0 +1,5 @@
+# Docker no lee .gitignore, hay que declararlo aqui.
+node_modules
+.env
+.env.*
+.git

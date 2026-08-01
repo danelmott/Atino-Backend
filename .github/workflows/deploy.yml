@@ -1,0 +1,89 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+# Dos pushes seguidos harian reset --hard y build a la vez sobre el mismo directorio del
+# VPS. cancel-in-progress en false para no abortar un deploy a mitad de una migracion.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar secrets
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in SSH_HOST SSH_USER SSH_PRIVATE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Secret $name no configurado o vacío"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+        
+      - name: Configurar SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+        
+      - name: Registrar host del VPS
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          set -euo pipefail
+          host="$(printf '%s' "$SSH_HOST" | tr -d '[:space:]')"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if ! ssh-keyscan -T 15 -H "$host" >> ~/.ssh/known_hosts 2>keyscan.log; then
+            echo "::error::ssh-keyscan falló para ${host}:22"
+            echo "Revisa: IP/dominio correcto y firewall del VPS (debe aceptar SSH desde internet)."
+            cat keyscan.log
+            exit 1
+          fi
+      
+      - name: Deploy al VPS
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          host="$(printf '%s' "$SSH_HOST" | tr -d '[:space:]')"
+          ssh -o BatchMode=yes -o ConnectTimeout=15 \
+            "${SSH_USER}@${host}" \
+            "set -e && \
+              cd /home/danel/apps/atino-backend && \
+              git fetch origin main && \
+              git reset --hard origin/main && \
+              docker compose build && \
+              docker compose run --rm api npm run migrate up && \
+              docker compose up -d --remove-orphans && \
+              docker image prune -f"
+
+      - name: Comprobar que el contenedor sigue vivo
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          host="$(printf '%s' "$SSH_HOST" | tr -d '[:space:]')"
+          ssh -o BatchMode=yes -o ConnectTimeout=15 \
+            "${SSH_USER}@${host}" \
+            "set -e && \
+              cd /home/danel/apps/atino-backend && \
+              sleep 5 && \
+              if [ -z \"\$(docker compose ps --quiet --status running api)\" ]; then \
+                echo '::error::El contenedor no quedo corriendo'; \
+                docker compose logs --tail 50 api; \
+                exit 1; \
+              fi && \
+              echo 'api corriendo'"
