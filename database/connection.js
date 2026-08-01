@@ -6,6 +6,8 @@ export const dbConnection = new Pool({
     ssl: { rejectUnauthorized: false },
 });
 
+
+//CONNECT A DATABASE FOR TRANSACTION
 export async function withTransaction(fn) {
     const client = await dbConnection.connect();
     try {
@@ -13,10 +15,12 @@ export async function withTransaction(fn) {
         const result = await fn(client);
         await client.query('COMMIT');
         return result;
-    } catch (error) {
+    } 
+    catch (error) {
         await client.query('ROLLBACK');
         throw error;
-    } finally {
+    } 
+    finally {
         client.release();
     }
 }

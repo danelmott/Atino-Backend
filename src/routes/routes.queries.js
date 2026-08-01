@@ -1,0 +1,208 @@
+export const insertRoute = async (client, { userId, title, description, image }) => {
+    const { rows } = await client.query(
+        `INSERT INTO routes (user_id, title, description, image)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, title, description, image, is_published, created_at`,
+        [userId, title, description, image]
+    );
+
+    return rows[0];
+}
+
+/**
+ * Guard de autorizacion compartido: lessons y quizzes empiezan toda mutacion llamandolo,
+ * para no repetir el "(user_id = $2 OR $3 = TRUE)" en cada query de cada modulo.
+ */
+export const findRouteForOwner = async (client, { routeId, userId, isAdmin }) => {
+    const { rows } = await client.query(
+        `SELECT id, user_id, title FROM routes
+          WHERE id = $1 AND (user_id = $2 OR $3 = TRUE)`,
+        [routeId, userId, isAdmin]
+    );
+
+    return rows[0] ?? null;
+}
+
+export const findRouteById = async (client, routeId) => {
+    const { rows } = await client.query(
+        `SELECT r.*, u.name AS author_name, u.image AS author_image
+           FROM routes r JOIN users u ON u.id = r.user_id
+          WHERE r.id = $1`,
+        [routeId]
+    );
+
+    return rows[0] ?? null;
+}
+
+/**
+ * Lecciones y quizzes ya intercalados en el orden real de la ruta. El sub_pos = 0 de las
+ * lecciones garantiza que la leccion salga antes que los quizzes colgados de ella, y un
+ * quiz sin leccion (after_lesson_id NULL) cae al final. created_at desempata entre varios
+ * quizzes finales, que es el unico caso donde uq_quizzes_slot no impone unicidad.
+ */
+export const getRouteOutline = async (client, routeId) => {
+    const { rows } = await client.query(
+        `SELECT 'LESSON' AS item_type, l.id, l.title, l.content_type,
+                l.position AS lesson_pos, 0 AS sub_pos, l.created_at
+           FROM lessons l
+          WHERE l.route_id = $1
+          UNION ALL
+         SELECT 'QUIZ', q.id, q.title, NULL,
+                COALESCE(l.position, 2147483647), q.position, q.created_at
+           FROM quizzes q
+           LEFT JOIN lessons l ON l.id = q.after_lesson_id
+          WHERE q.route_id = $1
+          ORDER BY lesson_pos, sub_pos, created_at`,
+        [routeId]
+    );
+
+    return rows.map(({ item_type, id, title, content_type }) => ({
+        type: item_type,
+        id,
+        title,
+        ...(item_type === 'LESSON' ? { contentType: content_type } : {}),
+    }));
+}
+
+export const listPublishedRoutes = async (client, { take, skip }) => {
+    const { rows } = await client.query(
+        `SELECT r.id, r.title, r.description, r.image, r.rating_avg, r.rating_count,
+                r.enrollment_count, r.completion_count, r.created_at,
+                u.name AS author_name
+           FROM routes r JOIN users u ON u.id = r.user_id
+          WHERE r.is_published = 'PUBLIC'
+          ORDER BY r.created_at DESC
+          LIMIT $1 OFFSET $2`,
+        [take, skip]
+    );
+
+    return rows;
+}
+
+export const listRoutesByUser = async (client, { userId, take, skip }) => {
+    const { rows } = await client.query(
+        `SELECT id, title, description, image, is_published, rating_avg, rating_count,
+                enrollment_count, completion_count, created_at
+           FROM routes
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          LIMIT $2 OFFSET $3`,
+        [userId, take, skip]
+    );
+
+    return rows;
+}
+
+export const updateRouteById = async (client, { id, userId, isAdmin, title, description }) => {
+    const { rows } = await client.query(
+        `UPDATE routes
+            SET title = COALESCE($4, title), description = COALESCE($5, description)
+          WHERE id = $1 AND (user_id = $2 OR $3 = TRUE)
+          RETURNING id, title, description, image, is_published`,
+        [id, userId, isAdmin, title, description]
+    );
+
+    return rows[0] ?? null;
+}
+
+export const publishRouteById = async (client, { id, userId, isAdmin, status }) => {
+    const { rows } = await client.query(
+        `UPDATE routes SET is_published = $4
+          WHERE id = $1 AND (user_id = $2 OR $3 = TRUE)
+          RETURNING id, is_published`,
+        [id, userId, isAdmin, status]
+    );
+
+    return rows[0] ?? null;
+}
+
+export const countRouteLessons = async (client, routeId) => {
+    const { rows } = await client.query(
+        `SELECT COUNT(*)::int AS n FROM lessons WHERE route_id = $1`,
+        [routeId]
+    );
+
+    return rows[0].n;
+}
+
+export const replaceRouteTopics = async (client, routeId, topicIds) => {
+    await client.query(`DELETE FROM route_topics WHERE route_id = $1`, [routeId]);
+    if (topicIds.length === 0) return;
+
+    await client.query(
+        `INSERT INTO route_topics (route_id, topic_id)
+         SELECT $1, unnest($2::uuid[])
+         ON CONFLICT DO NOTHING`,
+        [routeId, topicIds]
+    );
+}
+
+export const getRouteTopics = async (client, routeId) => {
+    const { rows } = await client.query(
+        `SELECT t.id, t.slug, t.name
+           FROM route_topics rt JOIN topics t ON t.id = rt.topic_id
+          WHERE rt.route_id = $1
+          ORDER BY t.name`,
+        [routeId]
+    );
+
+    return rows;
+}
+
+export const listTopics = async (client) => {
+    const { rows } = await client.query(`SELECT id, slug, name FROM topics ORDER BY name`);
+    return rows;
+}
+
+/**
+ * Recoge todas las keys de S3 que cuelgan de una ruta. Hay que llamarla ANTES del DELETE:
+ * el cascade se lleva lessons -> lesson_blocks y quizzes -> quiz_questions en silencio, y
+ * despues ya no queda ninguna referencia a esos objetos en ninguna parte.
+ */
+export const collectRouteAttachmentKeys = async (client, routeId) => {
+    const { rows } = await client.query(
+        `SELECT image AS key FROM routes
+          WHERE id = $1 AND image IS NOT NULL
+         UNION ALL
+         SELECT lb.url FROM lesson_blocks lb
+           JOIN lessons l ON l.id = lb.lesson_id
+          WHERE l.route_id = $1 AND lb.url IS NOT NULL
+         UNION ALL
+         SELECT qq.image FROM quiz_questions qq
+           JOIN quizzes q ON q.id = qq.quiz_id
+          WHERE q.route_id = $1 AND qq.image IS NOT NULL`,
+        [routeId]
+    );
+
+    return rows.map((row) => row.key);
+}
+
+export const deleteRouteById = async (client, { id, userId, isAdmin }) => {
+    const { rows } = await client.query(
+        `DELETE FROM routes
+          WHERE id = $1 AND (user_id = $2 OR $3 = TRUE)
+          RETURNING id`,
+        [id, userId, isAdmin]
+    );
+
+    return rows[0] ?? null;
+}
+
+/**
+ * El CTE ve el snapshot anterior al UPDATE, asi que devuelve la key vieja para poder
+ * encolarla. Una subconsulta dentro del RETURNING daria lo mismo pero por un detalle
+ * sutil de evaluacion; el CTE lo deja explicito.
+ */
+export const updateRouteImage = async (client, { id, userId, isAdmin, image }) => {
+    const { rows } = await client.query(
+        `WITH previous AS (SELECT image FROM routes WHERE id = $1)
+         UPDATE routes r
+            SET image = $4
+           FROM previous
+          WHERE r.id = $1 AND (r.user_id = $2 OR $3 = TRUE)
+          RETURNING previous.image AS old_key, r.image AS new_key`,
+        [id, userId, isAdmin, image]
+    );
+
+    return rows[0] ?? null;
+}
