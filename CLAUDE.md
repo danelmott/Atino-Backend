@@ -33,10 +33,61 @@ When adding functionality, treat this as greenfield work: you will likely be cre
   Follow this naming/layout when building out new domains.
 - **Database access:** raw `pg` (`Pool`) via `database/connection.js`, no ORM/query builder — this is a deliberate, low-level choice by the project owner, not a placeholder to "upgrade" later. Migrations are plain SQL files under `database/migrations/`.
 - **Auth stack:** `passport` with `passport-local`, `passport-jwt`, and `passport-google-oauth20` strategies, plus `jsonwebtoken` and `bcrypt`. `src/users/users.strategys.js` already scaffolds all four passport strategies (`jwt`, `jwt-refresh`, local, Google) but every DB lookup inside them is stubbed out (`null /*crear querie*/`) pending real queries in `users.queries.js`. This matches the `accounts` table (provider + provider_account_id) and `refresh_tokens` table in the schema.
-- **Logging:** `pino` + `pino-http` (with `pino-pretty` as a dev dependency for formatted local output) are dependencies but not yet wired into `app.js`/`server.js`.
+- **Logging:** `pino` + `pino-http` (with `pino-pretty` for formatted local output), wired in `app.js` via `app.use(pinoHttp({ logger }))`. The shared instance lives in `src/lib/logger.js` and redacts cookie/authorization headers. Per-module loggers use `logger.child({ module: '<name>' })` — see `src/uploads/uploads.services.js`.
 - **AI integrations:** both `openai` and `@google/genai` SDKs are dependencies, suggesting AI-generated content (e.g. for the `lessons`/`quizzes` tables) is planned.
 - **Validation:** `zod` is a dependency for schema validation; use it for request payload validation in controllers.
 - Standard Express middleware present as dependencies: `cors`, `cookie-parser`, `express-rate-limit`.
+
+## The creator flow (routes → lessons → quizzes)
+
+A route is authored in two steps: first the route itself (title, description, cover, topics), then its content. `src/routes/`, `src/lessons/` and `src/quizzes/` implement **authoring only** — taking a quiz and grading it (`quiz_attempts`) is not built yet.
+
+**Ordering is the non-obvious part.** `lessons.position` orders lessons within a route; a quiz does *not* have its own route-level sequence — it hangs off a lesson via `quizzes.after_lesson_id` and appears right after it. `after_lesson_id IS NULL` means "at the end of the route" (final exam). `getRouteOutline()` in `routes.queries.js` produces the interleaved list with a `UNION ALL`, using `sub_pos = 0` for lessons so a lesson always precedes its own quizzes. Consequence of this model: **a quiz cannot be placed before the first lesson.**
+
+`uq_quizzes_slot` is deliberately `UNIQUE (route_id, after_lesson_id, position)` with default NULL semantics, *not* `NULLS NOT DISTINCT`. With NULLs treated as equal, the `ON DELETE SET NULL` on `after_lesson_id` can collide with an existing end-of-route quiz and make **deleting a lesson fail**. Ordering among several final quizzes is tie-broken by `created_at` instead.
+
+**Nested payloads.** A lesson arrives with its `blocks`, a quiz with its `questions` and `options`, each in one request and one transaction. Editing is a `PUT` that replaces the children wholesale. Child `position` comes from array order, so a client can never send duplicate or gapped positions.
+
+**Authorization** always starts from `findRouteForOwner()` in `routes.queries.js` — lessons and quizzes both import it rather than re-implementing the `(user_id = $2 OR $3 = TRUE)` check. A quiz's `afterLessonId` is additionally validated to belong to the same route, or it could be attached to another user's lesson.
+
+`reorderLessons` uses `SET CONSTRAINTS uq_lessons_route_position DEFERRED` inside the transaction — that is what the `DEFERRABLE` declaration in the schema is for. Without it a bulk position swap aborts mid-statement.
+
+## Uploads / S3
+
+`src/uploads/` handles all binary content (route covers, lesson slide images/videos, quiz question images). The file never passes through Express — the client uploads straight to S3 with a presigned URL.
+
+**The three-step flow:**
+
+1. `POST /uploads/sign` with `{ scope, contentType, size }` → returns `{ url, key, expiresIn }`.
+2. Client does a plain `PUT` to `url` with the exact bytes it declared.
+3. The domain service (`routes`, `lessons`, `quizzes`) calls `verifyUpload(user, key, scope)` **before** the `INSERT`, then stores the `key`.
+
+**The DB stores the key, never the URL.** A URL embeds bucket, region and domain — infra config duplicated across every row of `routes.image`, `lesson_blocks.url` and `quiz_questions.image`. The key (`uploads/<scope>/<userId>/<uuid>.<ext>`) is the canonical id and never changes; URLs are derived at read time with `urlOfReading(key, kind)`. Moving to CloudFront later means editing one function, not migrating three tables.
+
+**`UPLOAD_SCOPES`** in `uploads.services.js` is the policy table — each destination declares which content kinds it accepts. Adding a new upload destination is one line there (`uploads.schemas.js` derives its `z.enum` from it, so the two cannot drift). Limits: images 10 MB (`jpeg`/`png`/`webp`), video 200 MB (`mp4`/`webm`/`quicktime`).
+
+### Deleting attachments (the cascade problem)
+
+Nothing deletes S3 objects directly. **Everything goes through the `pending_deletions` queue.** S3 and Postgres cannot share a transaction, so "delete the row and delete the object" is never atomic — the DB is always the source of truth and S3 cleanup happens after.
+
+The keys are enqueued **inside the same transaction** as the `DELETE`, which is what makes it safe: either the route is deleted and its keys are queued, or neither happens. A crash between commit and S3 can no longer orphan an object. `drainPendingDeletions()` (in `uploads.services.js`) empties the queue with `DeleteObjectsCommand`; `startDeletionWorker()` in `server.js` retries whatever failed every 5 minutes.
+
+**The trap this exists to solve:** `routes → lessons → lesson_blocks` and `routes → quizzes → quiz_questions` all cascade. A `DELETE FROM routes` silently removes every row holding a key, so you never see them. **`collectRouteAttachmentKeys()` must run *before* the `DELETE`** — afterwards those keys are unrecoverable. Any new domain that stores keys must follow the same order: collect → delete → enqueue, all in one `withTransaction`.
+
+Rows survive failures (`attempts` is incremented, `last_error` recorded) and are abandoned after 5 tries. `DeleteObject` is idempotent in S3, so retrying a key that is already gone succeeds rather than jamming the queue.
+
+**Replacing an attachment: use `orphanKeys(previous, next)`** from `uploads.services.js`, never "enqueue all the old ones". In a `PUT` the user typically keeps some attachments; enqueueing those would delete an object the row still points at. It also strips external links.
+
+**Gotchas:**
+
+- **`ContentLength` is passed to `PutObjectCommand` on purpose.** It makes `content-length` a *signed* header, so S3 itself rejects a PUT whose byte count differs from what was declared. Remove it and the size limit becomes an honour system.
+- **`requestChecksumCalculation: 'WHEN_REQUIRED'` on the S3 client is load-bearing.** By default the SDK appends `x-amz-checksum-crc32` to the presigned URL, computed over an empty body (`AAAAAA==`) because at signing time there is no content. S3 then validates that checksum against what the client actually uploads, so **every non-empty upload fails**. Drop that option and all uploads break in a way that looks like a signature bug.
+- **`urlOfReading` rounds `signingDate`** to half the TTL. Without it every call returns a different query string and the browser re-downloads the file on every page load. With it, the same key yields a byte-identical URL inside the window, so caching works.
+- **Never log the signed URL.** It contains `X-Amz-Signature`, which is a write capability on the bucket — anyone reading it in the logs can upload. Log the `key` instead.
+- **`users.image` is a mixed column:** a full Google URL for OAuth accounts (set in `auth.strategys.js`), or an S3 key. `urlOfReading` returns anything starting with `http` untouched.
+- **`lib/s3.js` passes credentials explicitly** via `requireEnv`, so a missing var fails at boot rather than on a user's first upload. It does *not* import `dotenv/config` — `server.js` loads it first. Any standalone script that imports `s3.js` directly must run with `node --env-file=.env`.
+- **The IAM user needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject`** on `arn:aws:s3:::<bucket>/*`. Without them every operation returns a `403 AccessDenied` that looks identical to a signature problem — check the `<Code>` in the XML body to tell them apart. Note `DeleteObjects` reports this *per key* inside `result.Errors` rather than throwing, so the queue records it as a failed attempt instead of blowing up.
+- **Filter keys with `isStorageKey()` before enqueueing a delete.** `lesson_blocks.url` and `users.image` are mixed columns that may hold an external link (a pasted YouTube URL, a Google avatar); those must never reach `DeleteObjects`.
 
 ## Database schema
 
@@ -46,6 +97,9 @@ Defined in `database/migrations/1785436594889_initial-schema.sql`, applied to Su
 - `accounts` — links a user to an auth provider (`LOCAL`/`GOOGLE` enum) + provider account id; unique per (provider, provider_account_id) and per (user_id, provider).
 - `refresh_tokens` — JWT refresh tokens per user with expiry.
 - `verification_codes` — one-time codes per user with expiry/used_at (email verification / password reset).
+- `topics` — seeded with 8 starter categories (`database/migrations/1785612189392_seed-initial-topics.sql`); adjust the list to the product.
+- `quizzes.after_lesson_id` — added in `1785612187262_quizzes-after-lesson-order.sql`; see "The creator flow" above for why it replaced the route-level position sequence.
+- `pending_deletions` — queue of S3 keys awaiting deletion (`database/migrations/1785602157806_pending-deletions-queue.sql`). Filled inside the same transaction that deletes the referencing rows; see "Deleting attachments" above.
 - `feedback_messages` / `feedback_answers` / `feedback_message_likes` / `feedback_answer_likes` — a feedback/forum-style feature: messages, threaded answers, and likes on both, each with `updated_at` maintained by the shared `set_updated_at()` trigger function.
 - `routes`, `lessons`, `quizess` — stub tables for a learning-path/lesson/quiz feature (name has a typo: "quizess"). **Superseded by the pending migration below — do not build on these.**
 
