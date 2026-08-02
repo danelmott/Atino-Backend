@@ -45,7 +45,10 @@ export const insertLessonBlocks = async (client, lessonId, blocks) => {
 
 export const findLessonWithRoute = async (client, lessonId) => {
     const { rows } = await client.query(
-        `SELECT l.id, l.route_id, l.title, l.content_type, l.content, l.position, r.user_id
+        // r.user_id y r.is_published vienen de aqui para poder autorizar en la misma
+        // consulta que resuelve leccion -> ruta, sin un viaje extra a la base.
+        `SELECT l.id, l.route_id, l.title, l.content_type, l.content, l.position,
+                r.user_id, r.is_published
            FROM lessons l JOIN routes r ON r.id = l.route_id
           WHERE l.id = $1`,
         [lessonId]

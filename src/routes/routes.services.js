@@ -2,6 +2,7 @@ import { withServiceError } from '../lib/withServiceError.js';
 import { withTransaction } from '../../database/connection.js';
 import { dbConnection } from '../../database/connection.js';
 import { isStorageKey, enqueueDeletions, verifyUpload, urlOfReading, drainPendingDeletions } from '../uploads/uploads.services.js';
+import { recordActivity } from '../gamification/gamification.services.js';
 import {
     collectRouteAttachmentKeys,
     deleteRouteById,
@@ -55,6 +56,15 @@ export const createRoute = withServiceError(async (user, { title, description, i
         });
 
         await replaceRouteTopics(client, created.id, topicIds ?? []);
+
+        // Ultima sentencia de la transaccion, por el orden de locks: ver recordActivity.
+        // Crear no da XP, pero pinta cuadrito en el heatmap y mantiene viva la racha.
+        await recordActivity(client, {
+            userId: user.userId,
+            eventType: 'ROUTE_CREATED',
+            subjectId: created.id,
+        });
+
         return created;
     });
 
@@ -127,6 +137,15 @@ export const setRouteVisibility = withServiceError(async (user, routeId, status)
         });
 
         if (!row) throw { code: 'ROUTE_NOT_FOUND', message: 'No fue posible encontrar la ruta' };
+
+        // Solo al publicar: despublicar y volver a publicar no deberia pintar cuadrito.
+        if (status === 'PUBLIC') {
+            await recordActivity(client, {
+                userId: user.userId,
+                eventType: 'ROUTE_PUBLISHED',
+                subjectId: row.id,
+            });
+        }
 
         return { id: row.id, isPublished: row.is_published };
     });
