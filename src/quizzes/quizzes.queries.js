@@ -61,7 +61,10 @@ export const insertOptions = async (client, questionId, options) => {
 
 export const findQuizWithRoute = async (client, quizId) => {
     const { rows } = await client.query(
-        `SELECT q.id, q.route_id, q.title, q.after_lesson_id, q.position, r.user_id
+        // r.user_id y r.is_published vienen de aqui para poder autorizar en la misma
+        // consulta que resuelve quiz -> ruta, sin un viaje extra a la base.
+        `SELECT q.id, q.route_id, q.title, q.after_lesson_id, q.position,
+                r.user_id, r.is_published
            FROM quizzes q JOIN routes r ON r.id = q.route_id
           WHERE q.id = $1`,
         [quizId]
@@ -76,6 +79,32 @@ export const getQuizQuestions = async (client, quizId) => {
                 COALESCE(
                     json_agg(json_build_object('id', qo.id, 'text', qo.text,
                                                'isCorrect', qo.is_correct, 'position', qo.position)
+                             ORDER BY qo.position)
+                    FILTER (WHERE qo.id IS NOT NULL), '[]'
+                ) AS options
+           FROM quiz_questions qq
+           LEFT JOIN quiz_options qo ON qo.question_id = qq.id
+          WHERE qq.quiz_id = $1
+          GROUP BY qq.id
+          ORDER BY qq.position`,
+        [quizId]
+    );
+
+    return rows;
+}
+
+/**
+ * La misma lectura que getQuizQuestions pero SIN is_correct: es la que se le sirve a quien
+ * viene a resolver el quiz. Es una consulta aparte y no un filtro en JS a proposito -- si la
+ * respuesta correcta nunca sale de la base, no puede escaparse por un log ni por un campo
+ * que alguien olvide quitar al formatear.
+ */
+export const getQuizQuestionsForTaking = async (client, quizId) => {
+    const { rows } = await client.query(
+        `SELECT qq.id, qq.question, qq.image, qq.position,
+                COALESCE(
+                    json_agg(json_build_object('id', qo.id, 'text', qo.text,
+                                               'position', qo.position)
                              ORDER BY qo.position)
                     FILTER (WHERE qo.id IS NOT NULL), '[]'
                 ) AS options

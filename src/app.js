@@ -7,8 +7,12 @@ import { authRouter } from './auth/auth.route.js'
 import { feedbackRouter } from './feedback/feedback.route.js'
 import { uploadsRouter } from './uploads/uploads.route.js'
 import { routesRouter } from './routes/routes.route.js'
+import { usersRouter } from './users/users.route.js'
 import { lessonsRouter } from './lessons/lessons.route.js'
 import { quizzesRouter } from './quizzes/quizzes.route.js'
+import { progressRouter } from './progress/progress.route.js'
+import { reviewsRouter } from './reviews/reviews.route.js'
+import { gamificationRouter } from './gamification/gamification.route.js'
 import { errorHandler } from './lib/errorHandler.js'
 import { logger } from './lib/logger.js'
 
@@ -32,10 +36,17 @@ app.use('/auth', authRouter);
 app.use('/feedback', feedbackRouter);
 app.use('/uploads', uploadsRouter);
 app.use('/routes', routesRouter);
+app.use('/users', usersRouter);
 
 // lessons y quizzes declaran rutas completas (/routes/:routeId/... y /lessons/:id),
 // asi que van montados en la raiz y despues de routesRouter.
 app.use(lessonsRouter);
 app.use(quizzesRouter);
+
+// Misma razon: progress cuelga de /lessons, /quizzes y /routes a la vez, y gamification
+// declara /users/:userId/stats y /ranking, que no comparten prefijo.
+app.use(progressRouter);
+app.use(reviewsRouter);
+app.use(gamificationRouter);
 
 app.use(errorHandler);

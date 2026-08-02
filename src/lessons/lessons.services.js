@@ -1,6 +1,7 @@
 import { withServiceError } from '../lib/withServiceError.js';
 import { withTransaction, dbConnection } from '../../database/connection.js';
 import { isStorageKey, orphanKeys, enqueueDeletions, verifyUpload, urlOfReading, drainPendingDeletions } from '../uploads/uploads.services.js';
+import { recordActivity } from '../gamification/gamification.services.js';
 import { findRouteForOwner } from '../routes/routes.queries.js';
 import {
     nextLessonPosition,
@@ -73,6 +74,13 @@ export const createLesson = withServiceError(async (user, routeId, payload) => {
             ? await insertLessonBlocks(client, created.id, blocks)
             : [];
 
+        // Ultima sentencia de la transaccion, por el orden de locks: ver recordActivity.
+        await recordActivity(client, {
+            userId: user.userId,
+            eventType: 'LESSON_CREATED',
+            subjectId: created.id,
+        });
+
         return { lesson: created, rows: inserted };
     });
 
@@ -82,6 +90,14 @@ export const createLesson = withServiceError(async (user, routeId, payload) => {
 export const getLesson = withServiceError(async (user, lessonId) => {
     const lesson = await findLessonWithRoute(dbConnection, lessonId);
     if (!lesson) throw { code: 'LESSON_NOT_FOUND', message: 'No fue posible encontrar la leccion' };
+
+    // El contenido de una ruta privada solo lo ve su autor (o un admin). Se responde
+    // LESSON_NOT_FOUND y no ACCESS_DENIED, igual que getRoute: no se confirma la existencia
+    // de recursos ajenos.
+    const isOwner = lesson.user_id === user.userId || isAdminRole(user.role);
+    if (lesson.is_published !== 'PUBLIC' && !isOwner) {
+        throw { code: 'LESSON_NOT_FOUND', message: 'No fue posible encontrar la leccion' };
+    }
 
     return formatLesson(lesson, await getLessonBlocks(dbConnection, lessonId));
 }, { code: 'ERROR_GETTING_LESSON', message: 'Hubo un error al intentar obtener la leccion' });

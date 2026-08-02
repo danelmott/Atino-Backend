@@ -23,6 +23,24 @@ export const findRouteForOwner = async (client, { routeId, userId, isAdmin }) =>
     return rows[0] ?? null;
 }
 
+/**
+ * El guard del lado alumno, complementario de findRouteForOwner: deja pasar a cualquiera si
+ * la ruta esta publicada, y solo al autor (o un admin) si no lo esta. findRouteForOwner no
+ * sirve aqui porque es solo-dueño y bloquearia a todos los que vienen a aprender.
+ *
+ * Devuelve user_id porque el que llama lo necesita para dos cosas: distinguir al autor y
+ * aplicar la regla de que el contenido propio no da XP.
+ */
+export const findRouteForConsumer = async (client, { routeId, userId, isAdmin }) => {
+    const { rows } = await client.query(
+        `SELECT id, user_id, is_published FROM routes
+          WHERE id = $1 AND (is_published = 'PUBLIC' OR user_id = $2 OR $3 = TRUE)`,
+        [routeId, userId, isAdmin]
+    );
+
+    return rows[0] ?? null;
+}
+
 export const findRouteById = async (client, routeId) => {
     const { rows } = await client.query(
         `SELECT r.*, u.name AS author_name, u.image AS author_image

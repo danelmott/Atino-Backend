@@ -1,6 +1,7 @@
 import { withServiceError } from '../lib/withServiceError.js';
 import { withTransaction, dbConnection } from '../../database/connection.js';
 import { isStorageKey, orphanKeys, enqueueDeletions, verifyUpload, urlOfReading, drainPendingDeletions } from '../uploads/uploads.services.js';
+import { recordActivity } from '../gamification/gamification.services.js';
 import { findRouteForOwner } from '../routes/routes.queries.js';
 import {
     nextQuizPosition,
@@ -10,6 +11,7 @@ import {
     insertOptions,
     findQuizWithRoute,
     getQuizQuestions,
+    getQuizQuestionsForTaking,
     collectQuizKeys,
     updateQuizById,
     deleteQuizQuestions,
@@ -99,7 +101,16 @@ export const createQuiz = withServiceError(async (user, routeId, payload) => {
             position: await nextQuizPosition(client, routeId, slot),
         });
 
-        return { quiz: created, rows: await insertQuestionTree(client, created.id, questions) };
+        const rows = await insertQuestionTree(client, created.id, questions);
+
+        // Ultima sentencia de la transaccion, por el orden de locks: ver recordActivity.
+        await recordActivity(client, {
+            userId: user.userId,
+            eventType: 'QUIZ_CREATED',
+            subjectId: created.id,
+        });
+
+        return { quiz: created, rows };
     });
 
     return formatQuiz(quiz, rows);
@@ -109,7 +120,21 @@ export const getQuiz = withServiceError(async (user, quizId) => {
     const quiz = await findQuizWithRoute(dbConnection, quizId);
     if (!quiz) throw { code: 'QUIZ_NOT_FOUND', message: 'No fue posible encontrar el quiz' };
 
-    return formatQuiz(quiz, await getQuizQuestions(dbConnection, quizId));
+    // Un quiz de una ruta privada solo lo ve su autor (o un admin). Se responde
+    // QUIZ_NOT_FOUND y no ACCESS_DENIED, igual que getRoute: no se confirma la existencia
+    // de recursos ajenos.
+    const isOwner = quiz.user_id === user.userId || isAdminRole(user.role);
+    if (quiz.is_published !== 'PUBLIC' && !isOwner) {
+        throw { code: 'QUIZ_NOT_FOUND', message: 'No fue posible encontrar el quiz' };
+    }
+
+    // El solucionario es solo para quien lo escribio: al alumno se le sirve la version sin
+    // is_correct, o resolver el quiz seria un tramite.
+    const questions = isOwner
+        ? await getQuizQuestions(dbConnection, quizId)
+        : await getQuizQuestionsForTaking(dbConnection, quizId);
+
+    return formatQuiz(quiz, questions);
 }, { code: 'ERROR_GETTING_QUIZ', message: 'Hubo un error al intentar obtener el quiz' });
 
 export const updateQuiz = withServiceError(async (user, quizId, payload) => {
