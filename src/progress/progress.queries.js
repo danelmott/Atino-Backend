@@ -189,6 +189,50 @@ export const listAttempts = async (client, { quizId, userId }) => {
  * las lecciones mantiene la regla de que una leccion va antes que los quizzes que cuelgan
  * de ella.
  */
+/**
+ * El progreso de TODAS las rutas en las que el usuario esta inscrito, en una sola consulta.
+ * Es lo que necesita la pantalla de descubrimiento para pintar la chapa de empezada/terminada
+ * en cada tarjeta sin pedir el progreso ruta por ruta.
+ *
+ * Los dos predicados EXISTS son literalmente los mismos que usa getRouteProgress mas abajo, y
+ * eso es lo que garantiza que este listado y el detalle de una ruta no puedan discrepar.
+ *
+ * Se cuenta con COUNT(*) FILTER (WHERE EXISTS ...) y no con un JOIN a lesson_completions y
+ * quiz_attempts: un quiz con tres intentos aprobados duplicaria filas y contaria tres veces,
+ * inflando a la vez el total y el hecho.
+ */
+export const listUserProgress = async (client, { userId, passScore, take, skip }) => {
+    const { rows } = await client.query(
+        `SELECT e.route_id, e.started_at, e.completed_at,
+                lessons.total + quizzes.total AS total,
+                lessons.done  + quizzes.done  AS done
+           FROM route_enrollments e
+           LEFT JOIN LATERAL (
+               SELECT COUNT(*)::int AS total,
+                      COUNT(*) FILTER (
+                          WHERE EXISTS (SELECT 1 FROM lesson_completions lc
+                                         WHERE lc.lesson_id = l.id AND lc.user_id = e.user_id)
+                      )::int AS done
+                 FROM lessons l WHERE l.route_id = e.route_id
+           ) lessons ON TRUE
+           LEFT JOIN LATERAL (
+               SELECT COUNT(*)::int AS total,
+                      COUNT(*) FILTER (
+                          WHERE EXISTS (SELECT 1 FROM quiz_attempts qa
+                                         WHERE qa.quiz_id = q.id AND qa.user_id = e.user_id
+                                           AND qa.completed_at IS NOT NULL AND qa.score >= $2)
+                      )::int AS done
+                 FROM quizzes q WHERE q.route_id = e.route_id
+           ) quizzes ON TRUE
+          WHERE e.user_id = $1
+          ORDER BY e.started_at DESC
+          LIMIT $3 OFFSET $4`,
+        [userId, passScore, take, skip]
+    );
+
+    return rows;
+}
+
 export const getRouteProgress = async (client, { routeId, userId, passScore }) => {
     const { rows } = await client.query(
         `SELECT item_type, id, title, position, sub_pos, done

@@ -172,7 +172,7 @@ export const recordActivity = async (client, { userId, eventType, subjectId, own
 // ============================================================
 
 const formatStats = async (row, counters) => ({
-    user: { id: row.id, name: row.name, image: await urlOfReading(row.image) },
+    user: { id: row.id, name: row.name, image: await urlOfReading(row.image), verified: row.is_verified },
     xp: row.xp,
     league: formatLeague(row.xp),
     currentStreak: row.current_streak,
@@ -268,13 +268,43 @@ export const currentSeason = () => new Date().toISOString().slice(0, 7);
 const percentBeaten = ({ beaten, total }) =>
     (total > 1 ? Math.round((beaten / (total - 1)) * 1000) / 10 : 100);
 
-const formatRankRow = async (row) => ({
+const formatRankUser = async (row) => ({
+    id: row.user_id,
+    name: row.name,
+    image: await urlOfReading(row.image),
+    verified: row.is_verified,
+});
+
+/**
+ * El ranking global va con el XP DE POR VIDA: es el mismo numero que decide la liga, asi que
+ * formatLeague(row.xp) es correcto aqui.
+ */
+const formatGlobalRow = async (row) => ({
     position: row.position,
-    user: { id: row.user_id, name: row.name, image: await urlOfReading(row.image) },
+    user: await formatRankUser(row),
     xp: row.xp,
     ...(row.current_streak !== undefined ? { currentStreak: row.current_streak } : {}),
     league: formatLeague(row.xp),
 });
+
+/**
+ * La cohorte va con el XP DE LA TEMPORADA, que arranca en cero cada mes. Se emite como
+ * `seasonXp` y no como `xp` para que no se pueda confundir con el acumulado: son dos
+ * magnitudes distintas y mezclarlas dejaria el ranking mensual congelado.
+ *
+ * Y la liga sale de ranking_members.league, la que se congelo al entrar en la temporada, NO de
+ * formatLeague(seasonXp): con el XP del mes, el dia 1 todo el mundo seria Bronce.
+ */
+const formatCohortRow = async (row) => {
+    const league = LEAGUES[row.league] ?? LEAGUES[0];
+
+    return {
+        position: row.position,
+        user: await formatRankUser(row),
+        seasonXp: row.xp,
+        league: { level: league.level, name: league.name, label: league.label },
+    };
+};
 
 /** La cohorte del usuario en una temporada: contra quienes compite este mes. */
 export const getSeasonRanking = withServiceError(async (userId, season) => {
@@ -292,7 +322,7 @@ export const getSeasonRanking = withServiceError(async (userId, season) => {
         joined: true,
         league: LEAGUES[membership.league] ?? LEAGUES[0],
         cohortSize: rows.length,
-        members: await Promise.all(rows.map(formatRankRow)),
+        members: await Promise.all(rows.map(formatCohortRow)),
     };
 }, { code: 'ERROR_GETTING_RANKING', message: 'Hubo un error al intentar obtener el ranking' });
 
@@ -339,5 +369,5 @@ export const getMyStanding = withServiceError(async (userId, season) => {
 export const getGlobalRanking = withServiceError(async ({ take, skip }) => {
     const rows = await listGlobalRanking(dbConnection, { take, skip });
 
-    return Promise.all(rows.map(formatRankRow));
+    return Promise.all(rows.map(formatGlobalRow));
 }, { code: 'ERROR_GETTING_RANKING', message: 'Hubo un error al intentar obtener el ranking' });

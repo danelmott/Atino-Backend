@@ -7,13 +7,14 @@ export const createRouteSchema = z.object({
     description: z.string().max(2000, "La descripcion es demasiado larga").optional(),
     // Key de S3 devuelta por POST /uploads/sign, no una URL.
     image: z.string().min(1).optional(),
-    topicIds: z.array(uuid).max(5, "Como maximo 5 categorias").optional(),
+    // Exactamente uno y obligatorio: sin subject la ruta no puede entrar en el feed.
+    topicId: uuid,
 });
 
 export const updateRouteSchema = z.object({
     title: z.string().min(3).max(120).optional(),
     description: z.string().max(2000).optional(),
-    topicIds: z.array(uuid).max(5, "Como maximo 5 categorias").optional(),
+    topicId: uuid.optional(),
 });
 
 export const updateCoverSchema = z.object({

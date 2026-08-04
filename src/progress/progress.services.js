@@ -16,6 +16,7 @@ import {
     insertAttemptAnswers,
     listAttempts,
     getRouteProgress,
+    listUserProgress,
     findEnrollment,
 } from './progress.queries.js';
 
@@ -190,6 +191,37 @@ export const getQuizAttempts = withServiceError(async (user, quizId) => {
     return rows.map((row) => formatAttempt(row));
 }, { code: 'ERROR_GETTING_ATTEMPTS', message: 'Hubo un error al intentar obtener los intentos' });
 
+/**
+ * `total` viaja SIEMPRE junto a `done`, y ese es el punto: el cliente no puede sacar el
+ * denominador de ningun otro campo. Antes lo deducia del numero de quizzes de la ruta, pero
+ * `done` cuenta lecciones completadas ademas de quizzes aprobados, asi que una ruta de diez
+ * lecciones y dos quizzes se pintaba terminada en la segunda leccion.
+ *
+ * `completed` sale de route_enrollments.completed_at y NO de done === total. Son cosas
+ * distintas en cuanto el autor añade una leccion a una ruta que alguien ya termino: la
+ * inscripcion sigue completada -- y el XP ya se pago -- aunque queden items sin hacer.
+ */
+const formatProgressRow = (row) => ({
+    routeId: row.route_id,
+    done: row.done,
+    total: row.total,
+    percent: row.total === 0 ? 0 : Math.round((row.done / row.total) * 100),
+    completed: row.completed_at !== null,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+});
+
+export const getMyProgress = withServiceError(async (user, { take, skip }) => {
+    const rows = await listUserProgress(dbConnection, {
+        userId: user.userId,
+        passScore: QUIZ_PASS_SCORE,
+        take,
+        skip,
+    });
+
+    return rows.map(formatProgressRow);
+}, { code: 'ERROR_GETTING_PROGRESS', message: 'Hubo un error al intentar obtener tu progreso' });
+
 export const getRouteProgressForUser = withServiceError(async (user, routeId) => {
     await assertRouteConsumable(dbConnection, user, routeId);
 
@@ -204,6 +236,8 @@ export const getRouteProgressForUser = withServiceError(async (user, routeId) =>
         routeId,
         startedAt: enrollment?.started_at ?? null,
         completedAt: enrollment?.completed_at ?? null,
+        // Igual que en el listado: almacenado, no derivado de done === total.
+        completed: (enrollment?.completed_at ?? null) !== null,
         total: items.length,
         done,
         percent: items.length === 0 ? 0 : Math.round((done / items.length) * 100),

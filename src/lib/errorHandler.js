@@ -31,10 +31,22 @@ const ERROR_STATUS = {
     CANNOT_RATE_OWN_ROUTE: 403,
     RATING_NOT_FOUND: 404,
     INVALID_TIMEZONE: 400,
+    TOPIC_NOT_FOUND: 404,
+    CANNOT_FOLLOW_SELF: 403,
 };
 
 /** Código de Postgres para violación de constraint UNIQUE. */
 const PG_UNIQUE_VIOLATION = '23505';
+
+/**
+ * Errores de librerías que traen status pero no `code` propio -- el 413 de express.json es el
+ * habitual. Sin este mapa todos salían como UNAUTHORIZED y el cliente los leía como sesión caída.
+ */
+const LIB_STATUS_CODES = {
+    401: 'UNAUTHORIZED',
+    413: 'PAYLOAD_TOO_LARGE',
+    415: 'UNSUPPORTED_MEDIA_TYPE',
+};
 
 export const errorHandler = (err, req, res, next) => {
     if (err instanceof ZodError) {
@@ -56,10 +68,12 @@ export const errorHandler = (err, req, res, next) => {
         return res.status(status).json({ code: err.code, message: err.message });
     }
 
-    // Errores de librerías de terceros (p. ej. passport con failWithError) que traen su propio status.
     const libStatus = err.status ?? err.statusCode;
     if (libStatus) {
-        return res.status(libStatus).json({ code: 'UNAUTHORIZED', message: err.message ?? 'No autorizado' });
+        return res.status(libStatus).json({
+            code: LIB_STATUS_CODES[libStatus] ?? 'REQUEST_FAILED',
+            message: err.message ?? 'No se pudo completar la peticion',
+        });
     }
 
     logger.error({ err }, 'unhandled error');

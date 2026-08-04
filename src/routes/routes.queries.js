@@ -1,9 +1,13 @@
-export const insertRoute = async (client, { userId, title, description, image }) => {
+/**
+ * El RETURNING no puede traer el topic ya resuelto (slug, nombre, disciplina) porque un
+ * INSERT no admite JOIN, asi que devuelve topic_id y el service lo completa.
+ */
+export const insertRoute = async (client, { userId, title, description, image, topicId }) => {
     const { rows } = await client.query(
-        `INSERT INTO routes (user_id, title, description, image)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, title, description, image, is_published, created_at`,
-        [userId, title, description, image]
+        `INSERT INTO routes (user_id, title, description, image, topic_id)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, title, description, image, is_published, topic_id, created_at`,
+        [userId, title, description, image, topicId]
     );
 
     return rows[0];
@@ -43,8 +47,11 @@ export const findRouteForConsumer = async (client, { routeId, userId, isAdmin })
 
 export const findRouteById = async (client, routeId) => {
     const { rows } = await client.query(
-        `SELECT r.*, u.name AS author_name, u.image AS author_image
-           FROM routes r JOIN users u ON u.id = r.user_id
+        `SELECT r.*, u.name AS author_name, u.image AS author_image, u.is_verified AS author_verified,
+                t.slug AS topic_slug, t.name AS topic_name
+           FROM routes r
+           JOIN users u  ON u.id = r.user_id
+           JOIN topics t ON t.id = r.topic_id
           WHERE r.id = $1`,
         [routeId]
     );
@@ -85,9 +92,12 @@ export const getRouteOutline = async (client, routeId) => {
 export const listPublishedRoutes = async (client, { take, skip }) => {
     const { rows } = await client.query(
         `SELECT r.id, r.title, r.description, r.image, r.rating_avg, r.rating_count,
-                r.enrollment_count, r.completion_count, r.created_at,
-                u.name AS author_name
-           FROM routes r JOIN users u ON u.id = r.user_id
+                r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
+                u.name AS author_name, u.is_verified AS author_verified,
+                t.slug AS topic_slug, t.name AS topic_name
+           FROM routes r
+           JOIN users u  ON u.id = r.user_id
+           JOIN topics t ON t.id = r.topic_id
           WHERE r.is_published = 'PUBLIC'
           ORDER BY r.created_at DESC
           LIMIT $1 OFFSET $2`,
@@ -97,13 +107,21 @@ export const listPublishedRoutes = async (client, { take, skip }) => {
     return rows;
 }
 
-export const listRoutesByUser = async (client, { userId, take, skip }) => {
+/**
+ * Las rutas de un autor tal y como las ve otro usuario. No vale listRoutesByUser, que es el
+ * "mis rutas" del propio autor y por eso devuelve tambien las PRIVATE.
+ */
+export const listPublicRoutesByUser = async (client, { userId, take, skip }) => {
     const { rows } = await client.query(
-        `SELECT id, title, description, image, is_published, rating_avg, rating_count,
-                enrollment_count, completion_count, created_at
-           FROM routes
-          WHERE user_id = $1
-          ORDER BY created_at DESC
+        `SELECT r.id, r.title, r.description, r.image, r.rating_avg, r.rating_count,
+                r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
+                u.name AS author_name, u.is_verified AS author_verified,
+                t.slug AS topic_slug, t.name AS topic_name
+           FROM routes r
+           JOIN users u  ON u.id = r.user_id
+           JOIN topics t ON t.id = r.topic_id
+          WHERE r.is_published = 'PUBLIC' AND r.user_id = $1
+          ORDER BY r.created_at DESC
           LIMIT $2 OFFSET $3`,
         [userId, take, skip]
     );
@@ -111,13 +129,31 @@ export const listRoutesByUser = async (client, { userId, take, skip }) => {
     return rows;
 }
 
-export const updateRouteById = async (client, { id, userId, isAdmin, title, description }) => {
+export const listRoutesByUser = async (client, { userId, take, skip }) => {
+    const { rows } = await client.query(
+        `SELECT r.id, r.title, r.description, r.image, r.is_published, r.rating_avg,
+                r.rating_count, r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
+                t.slug AS topic_slug, t.name AS topic_name
+           FROM routes r
+           JOIN topics t ON t.id = r.topic_id
+          WHERE r.user_id = $1
+          ORDER BY r.created_at DESC
+          LIMIT $2 OFFSET $3`,
+        [userId, take, skip]
+    );
+
+    return rows;
+}
+
+export const updateRouteById = async (client, { id, userId, isAdmin, title, description, topicId }) => {
     const { rows } = await client.query(
         `UPDATE routes
-            SET title = COALESCE($4, title), description = COALESCE($5, description)
+            SET title       = COALESCE($4, title),
+                description = COALESCE($5, description),
+                topic_id    = COALESCE($6, topic_id)
           WHERE id = $1 AND (user_id = $2 OR $3 = TRUE)
-          RETURNING id, title, description, image, is_published`,
-        [id, userId, isAdmin, title, description]
+          RETURNING id, title, description, image, is_published, topic_id`,
+        [id, userId, isAdmin, title, description, topicId]
     );
 
     return rows[0] ?? null;
@@ -143,32 +179,26 @@ export const countRouteLessons = async (client, routeId) => {
     return rows[0].n;
 }
 
-export const replaceRouteTopics = async (client, routeId, topicIds) => {
-    await client.query(`DELETE FROM route_topics WHERE route_id = $1`, [routeId]);
-    if (topicIds.length === 0) return;
-
-    await client.query(
-        `INSERT INTO route_topics (route_id, topic_id)
-         SELECT $1, unnest($2::uuid[])
-         ON CONFLICT DO NOTHING`,
-        [routeId, topicIds]
-    );
-}
-
-export const getRouteTopics = async (client, routeId) => {
+/**
+ * Se valida el subject aparte en vez de dejar que reviente la FK: un 23503 no esta en el
+ * mapa de ERROR_STATUS, asi que saldria como un 500 en lugar de un 404 con su mensaje.
+ */
+export const findTopicById = async (client, topicId) => {
     const { rows } = await client.query(
-        `SELECT t.id, t.slug, t.name
-           FROM route_topics rt JOIN topics t ON t.id = rt.topic_id
-          WHERE rt.route_id = $1
-          ORDER BY t.name`,
-        [routeId]
+        `SELECT id, slug, name FROM topics WHERE id = $1`,
+        [topicId]
     );
 
-    return rows;
+    return rows[0] ?? null;
 }
 
+// Las catorce materias son un unico nivel, sin agrupacion por encima, asi que el orden es
+// alfabetico. El orden con el que /explore pinta su rejilla es cosa del cliente.
 export const listTopics = async (client) => {
-    const { rows } = await client.query(`SELECT id, slug, name FROM topics ORDER BY name`);
+    const { rows } = await client.query(
+        `SELECT id, slug, name FROM topics ORDER BY name`
+    );
+
     return rows;
 }
 

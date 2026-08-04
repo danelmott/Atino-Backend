@@ -11,12 +11,12 @@ import {
     findRouteById,
     getRouteOutline,
     listPublishedRoutes,
+    listPublicRoutesByUser,
     listRoutesByUser,
     updateRouteById,
     publishRouteById,
     countRouteLessons,
-    replaceRouteTopics,
-    getRouteTopics,
+    findTopicById,
     listTopics,
 } from './routes.queries.js';
 
@@ -25,27 +25,47 @@ const isAdminRole = (role) => role === 'ADMIN';
 /** Se lanza sin await: si falla, la key sigue encolada y el worker la reintenta. */
 const drainInBackground = () => { drainPendingDeletions().catch(() => {}); };
 
+/**
+ * Las filas de listado traen el topic ya resuelto por el JOIN; las que salen de un INSERT o
+ * un UPDATE solo traen topic_id, y en ese caso el service lo completa antes de formatear.
+ */
+const formatTopic = (row) => (row.topic_slug
+    ? { id: row.topic_id, slug: row.topic_slug, name: row.topic_name }
+    : null);
+
 const formatRouteCard = async (row) => ({
     id: row.id,
     title: row.title,
     description: row.description,
     image: await urlOfReading(row.image),
     isPublished: row.is_published,
+    topic: formatTopic(row),
     ratingAvg: Number(row.rating_avg ?? 0),
     ratingCount: row.rating_count,
     enrollmentCount: row.enrollment_count,
     completionCount: row.completion_count,
     createdAt: row.created_at,
-    ...(row.author_name ? { author: { name: row.author_name } } : {}),
+    ...(row.author_name ? { author: { name: row.author_name, verified: row.author_verified } } : {}),
+});
+
+/** Convierte un topic suelto en las columnas que espera formatTopic. */
+const withTopicColumns = (row, topic) => ({
+    ...row,
+    topic_id: topic.id,
+    topic_slug: topic.slug,
+    topic_name: topic.name,
 });
 
 export const getTopics = withServiceError(async () => {
     return listTopics(dbConnection);
 }, { code: 'ERROR_GETTING_TOPICS', message: 'Hubo un error al intentar obtener las categorias' });
 
-export const createRoute = withServiceError(async (user, { title, description, image, topicIds }) => {
+export const createRoute = withServiceError(async (user, { title, description, image, topicId }) => {
     // Antes de guardar la key hay que confirmar que el objeto existe y es del usuario.
     if (isStorageKey(image)) await verifyUpload(user, image, 'route-cover');
+
+    const topic = await findTopicById(dbConnection, topicId);
+    if (!topic) throw { code: 'TOPIC_NOT_FOUND', message: 'La categoria elegida no existe' };
 
     const route = await withTransaction(async (client) => {
         const created = await insertRoute(client, {
@@ -53,9 +73,8 @@ export const createRoute = withServiceError(async (user, { title, description, i
             title,
             description: description ?? null,
             image: image ?? null,
+            topicId,
         });
-
-        await replaceRouteTopics(client, created.id, topicIds ?? []);
 
         // Ultima sentencia de la transaccion, por el orden de locks: ver recordActivity.
         // Crear no da XP, pero pinta cuadrito en el heatmap y mantiene viva la racha.
@@ -68,7 +87,7 @@ export const createRoute = withServiceError(async (user, { title, description, i
         return created;
     });
 
-    return { ...(await formatRouteCard(route)), topics: [] };
+    return formatRouteCard(withTopicColumns(route, topic));
 }, { code: 'ERROR_CREATING_ROUTE', message: 'Hubo un error al intentar crear la ruta' });
 
 export const getRoute = withServiceError(async (user, routeId) => {
@@ -81,15 +100,15 @@ export const getRoute = withServiceError(async (user, routeId) => {
         throw { code: 'ROUTE_NOT_FOUND', message: 'No fue posible encontrar la ruta' };
     }
 
-    const [items, topics] = await Promise.all([
-        getRouteOutline(dbConnection, routeId),
-        getRouteTopics(dbConnection, routeId),
-    ]);
+    const items = await getRouteOutline(dbConnection, routeId);
 
     return {
         ...(await formatRouteCard(route)),
-        author: { name: route.author_name, image: await urlOfReading(route.author_image) },
-        topics,
+        author: {
+            name: route.author_name,
+            image: await urlOfReading(route.author_image),
+            verified: route.author_verified,
+        },
         items,
     };
 }, { code: 'ERROR_GETTING_ROUTE', message: 'Hubo un error al intentar obtener la ruta' });
@@ -102,7 +121,24 @@ export const listRoutes = withServiceError(async (user, { mine, take, skip }) =>
     return Promise.all(rows.map(formatRouteCard));
 }, { code: 'ERROR_GETTING_ROUTES', message: 'Hubo un error al intentar obtener las rutas' });
 
-export const updateRoute = withServiceError(async (user, routeId, { title, description, topicIds }) => {
+/**
+ * Las rutas publicas de un autor, para su perfil. Vive aqui y no en users porque el SQL de
+ * rutas y formatRouteCard son de este modulo; users solo pone la URL.
+ */
+export const listPublicRoutesOfUser = withServiceError(async (userId, { take, skip }) => {
+    const rows = await listPublicRoutesByUser(dbConnection, { userId, take, skip });
+
+    return Promise.all(rows.map(formatRouteCard));
+}, { code: 'ERROR_GETTING_ROUTES', message: 'Hubo un error al intentar obtener las rutas' });
+
+export const updateRoute = withServiceError(async (user, routeId, { title, description, topicId }) => {
+    // Se comprueba antes de abrir la transaccion: si el subject no existe, la FK abortaria
+    // con un 23503 que el errorHandler no mapea y saldria como un 500.
+    if (topicId) {
+        const exists = await findTopicById(dbConnection, topicId);
+        if (!exists) throw { code: 'TOPIC_NOT_FOUND', message: 'La categoria elegida no existe' };
+    }
+
     const updated = await withTransaction(async (client) => {
         const row = await updateRouteById(client, {
             id: routeId,
@@ -110,15 +146,18 @@ export const updateRoute = withServiceError(async (user, routeId, { title, descr
             isAdmin: isAdminRole(user.role),
             title: title ?? null,
             description: description ?? null,
+            topicId: topicId ?? null,
         });
 
         if (!row) throw { code: 'ROUTE_NOT_FOUND', message: 'No fue posible encontrar la ruta que intentas editar' };
 
-        if (topicIds) await replaceRouteTopics(client, routeId, topicIds);
         return row;
     });
 
-    return { ...(await formatRouteCard(updated)), topics: await getRouteTopics(dbConnection, routeId) };
+    // El UPDATE devuelve topic_id pero no el topic resuelto, y puede no haber cambiado.
+    const topic = await findTopicById(dbConnection, updated.topic_id);
+
+    return formatRouteCard(withTopicColumns(updated, topic));
 }, { code: 'ERROR_UPDATING_ROUTE', message: 'Hubo un error al intentar editar la ruta' });
 
 export const setRouteVisibility = withServiceError(async (user, routeId, status) => {

@@ -153,7 +153,7 @@ export const incrementCohortCount = async (client, cohortId) => {
  */
 export const findUserStats = async (client, userId) => {
     const { rows } = await client.query(
-        `SELECT u.id, u.name, u.image,
+        `SELECT u.id, u.name, u.image, u.is_verified,
                 COALESCE(s.xp, 0)             AS xp,
                 COALESCE(s.current_streak, 0) AS current_streak,
                 COALESCE(s.longest_streak, 0) AS longest_streak,
@@ -227,7 +227,7 @@ export const findSeasonMembership = async (client, { season, userId }) => {
 /** RANK() y no ROW_NUMBER(): dos usuarios con el mismo XP comparten posicion. */
 export const listCohort = async (client, cohortId) => {
     const { rows } = await client.query(
-        `SELECT m.user_id, u.name, u.image, m.xp,
+        `SELECT m.user_id, u.name, u.image, u.is_verified, m.xp, m.league,
                 RANK() OVER (ORDER BY m.xp DESC)::int AS position
            FROM ranking_members m JOIN users u ON u.id = m.user_id
           WHERE m.cohort_id = $1
@@ -270,7 +270,7 @@ export const getGlobalStanding = async (client, xp) => {
 /** La ventana de RANK() se calcula antes del LIMIT, asi que las posiciones son absolutas. */
 export const listGlobalRanking = async (client, { take, skip }) => {
     const { rows } = await client.query(
-        `SELECT s.user_id, u.name, u.image, s.xp, s.current_streak,
+        `SELECT s.user_id, u.name, u.image, u.is_verified, s.xp, s.current_streak,
                 RANK() OVER (ORDER BY s.xp DESC)::int AS position
            FROM user_stats s JOIN users u ON u.id = s.user_id
           ORDER BY s.xp DESC, u.name

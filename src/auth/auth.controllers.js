@@ -12,6 +12,14 @@ import {
     clearTokenCookies,
     buildPayload,
 } from './auth.services.js';
+import { getMyProfile } from '../users/users.services.js';
+
+/**
+ * Todo lo que abre sesion responde el mismo objeto que GET /users/me. Antes login devolvia el
+ * payload del token -- userId, email y role -- que no trae ni el nombre ni la imagen, que es
+ * justo lo unico que el cliente pinta nada mas entrar.
+ */
+const sessionUser = (user) => getMyProfile(buildPayload(user));
 
 export const register = async (req, res) => {
     const { email, password } = req.body;
@@ -22,7 +30,7 @@ export const register = async (req, res) => {
     }
 
     setTokenCookies(res, result.accessToken, result.refreshToken);
-    return res.status(200).json({ user: result.user });
+    return res.status(200).json({ user: await sessionUser(result.user) });
 }
 
 const authenticateLocal = (req, res) => new Promise((resolve, reject) => {
@@ -42,15 +50,15 @@ export const login = async (req, res) => {
     await saveRefreshToken(user.id, refreshToken);
 
     setTokenCookies(res, accessToken, refreshToken);
-    return res.status(200).json({ user: buildPayload(user) });
+    return res.status(200).json({ user: await sessionUser(user) });
 }
 
 export const verify = async (req, res) => {
     const { email, code } = req.body;
-    const { accessToken, refreshToken } = await verifyRegisterCode(email, code);
+    const { accessToken, refreshToken, user } = await verifyRegisterCode(email, code);
 
     setTokenCookies(res, accessToken, refreshToken);
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ user: await sessionUser(user) });
 }
 
 export const resend = async (req, res) => {
