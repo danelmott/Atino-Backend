@@ -27,8 +27,19 @@ export const visibilitySchema = z.object({
 
 export const idParamSchema = z.object({ id: uuid });
 
+/**
+ * `mine` NO puede ser z.coerce.boolean(): eso es Boolean(string), y toda cadena no vacia es
+ * true -- incluida "false". Con el coerce, ?mine=false devolvia las rutas propias y la unica
+ * forma de pedir el listado publico era omitir el parametro.
+ */
+const queryBoolean = z.enum(['true', 'false']).transform((value) => value === 'true');
+
 export const listQuerySchema = z.object({
-    mine: z.coerce.boolean().default(false),
+    mine: queryBoolean.default('false'),
+    // El slug de la materia, no su uuid: el slug es el contrato con el front, que resuelve
+    // banner, icono y tinte a partir de el.
+    topic: z.string().trim().min(1).max(60).optional(),
+    sort: z.enum(['recent', 'rating']).default('recent'),
     skip: z.coerce.number().int().min(0).default(0),
     take: z.coerce.number().int().min(1).max(50).default(20),
 });

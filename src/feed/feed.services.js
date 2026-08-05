@@ -45,6 +45,7 @@ const formatFeedItem = async (row) => ({
     author: {
         id: row.author_id,
         name: row.author_name,
+        username: row.author_username,
         verified: row.author_verified,
         isFollowing: row.author_followed,
     },

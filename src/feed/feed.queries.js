@@ -35,6 +35,7 @@ export const recommendRoutes = async (client, { userId, take, skip, weights }) =
                 r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
                 r.user_id AS author_id,
                 u.name AS author_name,
+                u.username AS author_username,
                 u.is_verified AS author_verified,
                 (f.following_id IS NOT NULL) AS author_followed,
                 t.slug AS topic_slug, t.name AS topic_name,

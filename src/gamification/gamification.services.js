@@ -172,7 +172,13 @@ export const recordActivity = async (client, { userId, eventType, subjectId, own
 // ============================================================
 
 const formatStats = async (row, counters) => ({
-    user: { id: row.id, name: row.name, image: await urlOfReading(row.image), verified: row.is_verified },
+    user: {
+        id: row.id,
+        name: row.name,
+        username: row.username,
+        image: await urlOfReading(row.image),
+        verified: row.is_verified,
+    },
     xp: row.xp,
     league: formatLeague(row.xp),
     currentStreak: row.current_streak,
@@ -271,6 +277,8 @@ const percentBeaten = ({ beaten, total }) =>
 const formatRankUser = async (row) => ({
     id: row.user_id,
     name: row.name,
+    // Cada fila del ranking enlaza al perfil, y el front enruta por handle.
+    username: row.username,
     image: await urlOfReading(row.image),
     verified: row.is_verified,
 });

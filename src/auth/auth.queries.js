@@ -1,4 +1,5 @@
 import { dbConnection, withTransaction } from '../../database/connection.js';
+import { ensureUniqueUsername } from '../lib/username.js';
 
 export const findAccountsByUserId = async (userId) => {
     const { rows } = await dbConnection.query(
@@ -43,7 +44,11 @@ export const createUserWithGoogleAccount = async ({ email, name, image }) => {
             [user.id]
         );
 
-        return user;
+        // Estos llegan con nombre desde el alta, asi que ya pueden tener handle sin esperar al
+        // onboarding. El local no puede: nace con name NULL y lo recibe alli.
+        const username = await ensureUniqueUsername(client, { userId: user.id, base: name });
+
+        return { ...user, username };
     });
 }
 

@@ -1,10 +1,14 @@
 import { withServiceError } from '../lib/withServiceError.js';
 import { dbConnection, withTransaction } from '../../database/connection.js';
+import { ensureUniqueUsername } from '../lib/username.js';
 import { urlOfReading } from '../uploads/uploads.services.js';
 import { getUserStats } from '../gamification/gamification.services.js';
 import {
     findUserProfile,
     findPublicProfile,
+    findPublicProfileByUsername,
+    findUserIdByUsername,
+    searchUsers as searchUsersQuery,
     probeTimezone,
     updateUserTimezone,
     updateUserName,
@@ -29,6 +33,9 @@ const formatProfile = async (row) => ({
     email: row.email,
     emailVerified: row.email_verified,
     name: row.name,
+    // Puede ser null entre el registro y el onboarding: el handle se deriva del nombre y hasta
+    // entonces no hay ninguno. Ver src/lib/username.js.
+    username: row.username,
     image: await urlOfReading(row.image),
     role: row.role,
     timezone: row.timezone,
@@ -52,6 +59,7 @@ const formatProfile = async (row) => ({
 const formatPublicProfile = async (row) => ({
     id: row.id,
     name: row.name,
+    username: row.username,
     image: await urlOfReading(row.image),
     verified: row.is_verified,
     followersCount: row.followers_count,
@@ -88,30 +96,40 @@ export const getMyProfile = withServiceError(async (user) => {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Un identificador con otra forma es un perfil que no existe, no una peticion mal formada: la
- * pantalla de perfil del cliente hace notFound() con un 404 y con el 400 de zod se quedaria
- * atascada en un error. Por eso la forma se comprueba aqui y no con validate() en el router,
- * que solo sabe responder 400.
+ * El identificador de la URL puede venir de dos formas, porque el front enruta los perfiles por
+ * handle (/profile/danel-mantilla) mientras que el resto de la API los referencia por uuid.
+ *
+ * La forma se comprueba aqui y no con validate() en el router a proposito: un identificador que
+ * no existe es un 404 -- que es lo que dispara el notFound() del cliente -- y no el 400 de zod,
+ * con el que la pantalla se quedaria atascada en un error.
  */
-const assertUserIdShape = (userId) => {
-    if (!UUID.test(userId)) {
-        throw { code: 'USER_NOT_FOUND', message: 'No fue posible encontrar el usuario' };
-    }
-};
+export const resolveUserId = withServiceError(async (identifier) => {
+    if (UUID.test(identifier)) return identifier;
+
+    const id = await findUserIdByUsername(dbConnection, identifier);
+    if (!id) throw { code: 'USER_NOT_FOUND', message: 'No fue posible encontrar el usuario' };
+
+    return id;
+}, { code: 'ERROR_GETTING_PROFILE', message: 'Hubo un error al intentar obtener el perfil' });
 
 /**
  * El perfil de otro usuario. Lleva la gamificacion pegada por el mismo motivo que el propio
  * -- liga y racha son parte de la ficha -- pero nunca los datos de cuenta.
+ *
+ * Las dos ramas resuelven el perfil en UNA consulta cada una en vez de traducir el handle a
+ * uuid y volver a preguntar: son el mismo SELECT cambiando la columna del WHERE.
  */
-export const getPublicProfile = withServiceError(async (user, userId) => {
-    assertUserIdShape(userId);
+export const getPublicProfile = withServiceError(async (user, identifier) => {
+    const row = UUID.test(identifier)
+        ? await findPublicProfile(dbConnection, { userId: identifier, viewerId: user.userId })
+        : await findPublicProfileByUsername(dbConnection, { username: identifier, viewerId: user.userId });
 
-    const row = await findPublicProfile(dbConnection, { userId, viewerId: user.userId });
     if (!row) throw { code: 'USER_NOT_FOUND', message: 'No fue posible encontrar el usuario' };
 
     const [profile, stats] = await Promise.all([
         formatPublicProfile(row),
-        getUserStats(userId),
+        // Con el id de la fila, no con el identificador de la URL: puede ser un handle.
+        getUserStats(row.id),
     ]);
 
     return {
@@ -122,6 +140,30 @@ export const getPublicProfile = withServiceError(async (user, userId) => {
         longestStreak: stats.longestStreak,
     };
 }, { code: 'ERROR_GETTING_PROFILE', message: 'Hubo un error al intentar obtener el perfil' });
+
+/**
+ * La ficha de persona que devuelve /search. Es la de follows mas routesCount, que es lo que el
+ * bloque de "resultado principal" escribe debajo del nombre.
+ *
+ * followersCount y routesCount salen siempre como numero: el cliente los pinta con
+ * toLocaleString() sin comprobar antes, y un null ahi revienta la pantalla entera.
+ */
+const formatSearchUser = async (row) => ({
+    id: row.id,
+    name: row.name,
+    username: row.username,
+    image: await urlOfReading(row.image),
+    verified: row.is_verified,
+    followersCount: row.followers_count ?? 0,
+    isFollowing: row.is_following,
+    routesCount: row.routes_count ?? 0,
+});
+
+export const searchPeople = withServiceError(async (viewerId, { words, term, termLike, take, skip }) => {
+    const rows = await searchUsersQuery(dbConnection, { words, term, termLike, viewerId, take, skip });
+
+    return Promise.all(rows.map(formatSearchUser));
+}, { code: 'ERROR_SEARCHING_USERS', message: 'Hubo un error al intentar buscar personas' });
 
 /**
  * La insignia la concede un ADMIN, nunca el propio usuario: el router lo garantiza con
@@ -175,11 +217,17 @@ export const completeOnboarding = withServiceError(async (user, { name, topicIds
         const updated = await updateUserName(client, { userId: user.userId, name });
         if (!updated) throw { code: 'USER_NOT_FOUND', message: 'No fue posible encontrar el usuario' };
 
+        // El handle se genera aqui porque este es el primer momento en que existe un nombre del
+        // que derivarlo: un usuario local nace con name NULL. Los de Google ya lo traen puesto
+        // desde el alta, y ensureUniqueUsername lo reescribe con el nombre que confirmen aqui.
+        const username = await ensureUniqueUsername(client, { userId: user.userId, base: name });
+
         const topics = await replaceTopics(client, user.userId, topicIds);
         const marked = await markOnboardingCompleted(client, user.userId);
 
         return {
             name: updated.name,
+            username,
             topics,
             onboardingCompleted: true,
             onboardingCompletedAt: marked?.onboarding_completed_at ?? null,

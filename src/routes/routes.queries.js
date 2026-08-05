@@ -47,7 +47,9 @@ export const findRouteForConsumer = async (client, { routeId, userId, isAdmin })
 
 export const findRouteById = async (client, routeId) => {
     const { rows } = await client.query(
-        `SELECT r.*, u.name AS author_name, u.image AS author_image, u.is_verified AS author_verified,
+        `SELECT r.*, r.user_id AS author_id,
+                u.name AS author_name, u.username AS author_username,
+                u.image AS author_image, u.is_verified AS author_verified,
                 t.slug AS topic_slug, t.name AS topic_name
            FROM routes r
            JOIN users u  ON u.id = r.user_id
@@ -89,19 +91,76 @@ export const getRouteOutline = async (client, routeId) => {
     }));
 }
 
-export const listPublishedRoutes = async (client, { take, skip }) => {
+/**
+ * El listado publico de /explore. El filtro por materia va por SLUG y no por uuid porque el
+ * slug es el contrato con el front -- de el resuelve banner, icono y tinte -- y asi el cliente
+ * no necesita conocer los uuids del catalogo.
+ *
+ * Los dos parametros opcionales van dentro de la misma consulta en vez de en ramas separadas:
+ * `$3::text IS NULL` neutraliza el filtro cuando no viene materia, y los dos CASE del ORDER BY
+ * valen NULL en TODAS las filas cuando el orden es por fecha, asi que no desempatan nada y
+ * manda el created_at. Con ramas serian cuatro copias del mismo SELECT.
+ */
+export const listPublishedRoutes = async (client, { topicSlug, sort, take, skip }) => {
     const { rows } = await client.query(
         `SELECT r.id, r.title, r.description, r.image, r.rating_avg, r.rating_count,
                 r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
-                u.name AS author_name, u.is_verified AS author_verified,
+                r.user_id AS author_id,
+                u.name AS author_name, u.username AS author_username,
+                u.image AS author_image, u.is_verified AS author_verified,
                 t.slug AS topic_slug, t.name AS topic_name
            FROM routes r
            JOIN users u  ON u.id = r.user_id
            JOIN topics t ON t.id = r.topic_id
           WHERE r.is_published = 'PUBLIC'
-          ORDER BY r.created_at DESC
+            AND ($3::text IS NULL OR t.slug = $3)
+          ORDER BY CASE WHEN $4::text = 'rating' THEN r.rating_avg   END DESC NULLS LAST,
+                   CASE WHEN $4::text = 'rating' THEN r.rating_count END DESC NULLS LAST,
+                   r.created_at DESC
           LIMIT $1 OFFSET $2`,
-        [take, skip]
+        [take, skip, topicSlug ?? null, sort ?? 'recent']
+    );
+
+    return rows;
+}
+
+/**
+ * La busqueda de rutas de /search. Replica el haystack de matchesQuery en el front -- titulo,
+ * nombre de la materia y nombre del autor -- para que "calculo luci" encuentre la ruta por
+ * titulo Y por autora a la vez.
+ *
+ * Las palabras llegan como un text[] y se exigen TODAS con LIKE ALL. Es lo que evita construir
+ * el SQL a mano: el numero de terminos es variable, y concatenar un AND por palabra significa
+ * interpolar en la consulta justo lo que el usuario ha escrito.
+ *
+ * El rango replica la escalera de scoreCreator del front (exacto > prefijo > contiene) para que
+ * escribir el titulo entero no deje la ruta sepultada bajo otra mejor valorada que solo lo
+ * contiene.
+ */
+export const searchPublishedRoutes = async (client, { words, term, termLike, take, skip }) => {
+    const { rows } = await client.query(
+        `SELECT r.id, r.title, r.description, r.image, r.rating_avg, r.rating_count,
+                r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
+                r.user_id AS author_id,
+                u.name AS author_name, u.username AS author_username,
+                u.image AS author_image, u.is_verified AS author_verified,
+                t.slug AS topic_slug, t.name AS topic_name
+           FROM routes r
+           JOIN users u  ON u.id = r.user_id
+           JOIN topics t ON t.id = r.topic_id
+          WHERE r.is_published = 'PUBLIC'
+            AND lower(atino_unaccent(r.title || ' ' || t.name || ' ' || coalesce(u.name, '')))
+                LIKE ALL ($3::text[])
+          ORDER BY CASE
+                       WHEN lower(atino_unaccent(r.title)) = $4                       THEN 4
+                       WHEN lower(atino_unaccent(r.title)) LIKE $5 || '%'             THEN 3
+                       WHEN lower(atino_unaccent(r.title)) LIKE '% ' || $5 || '%'     THEN 2
+                       ELSE 1
+                   END DESC,
+                   r.rating_avg DESC NULLS LAST,
+                   r.created_at DESC
+          LIMIT $1 OFFSET $2`,
+        [take, skip, words, term, termLike]
     );
 
     return rows;
@@ -115,7 +174,9 @@ export const listPublicRoutesByUser = async (client, { userId, take, skip }) => 
     const { rows } = await client.query(
         `SELECT r.id, r.title, r.description, r.image, r.rating_avg, r.rating_count,
                 r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
-                u.name AS author_name, u.is_verified AS author_verified,
+                r.user_id AS author_id,
+                u.name AS author_name, u.username AS author_username,
+                u.image AS author_image, u.is_verified AS author_verified,
                 t.slug AS topic_slug, t.name AS topic_name
            FROM routes r
            JOIN users u  ON u.id = r.user_id

@@ -21,6 +21,9 @@ import {
 const formatUserCard = async (row) => ({
     id: row.id,
     name: row.name,
+    // El handle con el que el front enruta el perfil. Igual que `verified`: si una respuesta
+    // que pinta un usuario se olvida de emitirlo, el enlace se rompe solo en esa pantalla.
+    username: row.username,
     image: await urlOfReading(row.image),
     verified: row.is_verified,
     followersCount: row.followers_count,

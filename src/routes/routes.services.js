@@ -11,6 +11,7 @@ import {
     findRouteById,
     getRouteOutline,
     listPublishedRoutes,
+    searchPublishedRoutes,
     listPublicRoutesByUser,
     listRoutesByUser,
     updateRouteById,
@@ -33,20 +34,42 @@ const formatTopic = (row) => (row.topic_slug
     ? { id: row.topic_id, slug: row.topic_slug, name: row.topic_name }
     : null);
 
-const formatRouteCard = async (row) => ({
-    id: row.id,
-    title: row.title,
-    description: row.description,
-    image: await urlOfReading(row.image),
-    isPublished: row.is_published,
-    topic: formatTopic(row),
-    ratingAvg: Number(row.rating_avg ?? 0),
-    ratingCount: row.rating_count,
-    enrollmentCount: row.enrollment_count,
-    completionCount: row.completion_count,
-    createdAt: row.created_at,
-    ...(row.author_name ? { author: { name: row.author_name, verified: row.author_verified } } : {}),
+/**
+ * El autor de la tarjeta, o null cuando la consulta no lo trae -- listRoutesByUser es el "mis
+ * rutas" del propio autor y no hace JOIN con users, porque ahi ya se sabe de quien son.
+ *
+ * Se mira author_id y NO author_name: `users.name` es nullable, asi que un autor que aun no ha
+ * pasado por el onboarding dejaria la tarjeta sin autor y sin enlace a su perfil. undefined
+ * distingue "la columna no se ha pedido" de "el usuario no tiene nombre todavia".
+ */
+const formatAuthor = async (row) => (row.author_id === undefined ? null : {
+    id: row.author_id,
+    name: row.author_name,
+    // El handle con el que el front enruta el perfil. Sin el, la tarjeta no puede enlazar a
+    // quien la ha escrito.
+    username: row.author_username,
+    image: await urlOfReading(row.author_image),
+    verified: row.author_verified,
 });
+
+export const formatRouteCard = async (row) => {
+    const author = await formatAuthor(row);
+
+    return {
+        id: row.id,
+        title: row.title,
+        description: row.description,
+        image: await urlOfReading(row.image),
+        isPublished: row.is_published,
+        topic: formatTopic(row),
+        ratingAvg: Number(row.rating_avg ?? 0),
+        ratingCount: row.rating_count,
+        enrollmentCount: row.enrollment_count,
+        completionCount: row.completion_count,
+        createdAt: row.created_at,
+        ...(author ? { author } : {}),
+    };
+};
 
 /** Convierte un topic suelto en las columnas que espera formatTopic. */
 const withTopicColumns = (row, topic) => ({
@@ -102,24 +125,29 @@ export const getRoute = withServiceError(async (user, routeId) => {
 
     const items = await getRouteOutline(dbConnection, routeId);
 
-    return {
-        ...(await formatRouteCard(route)),
-        author: {
-            name: route.author_name,
-            image: await urlOfReading(route.author_image),
-            verified: route.author_verified,
-        },
-        items,
-    };
+    // El author ya lo arma formatRouteCard a partir de las mismas columnas: antes se repetia
+    // aqui, y era la via por la que el detalle podia acabar emitiendo una ficha del autor
+    // distinta de la que emite la tarjeta.
+    return { ...(await formatRouteCard(route)), items };
 }, { code: 'ERROR_GETTING_ROUTE', message: 'Hubo un error al intentar obtener la ruta' });
 
-export const listRoutes = withServiceError(async (user, { mine, take, skip }) => {
+export const listRoutes = withServiceError(async (user, { mine, topic, sort, take, skip }) => {
     const rows = mine
         ? await listRoutesByUser(dbConnection, { userId: user.userId, take, skip })
-        : await listPublishedRoutes(dbConnection, { take, skip });
+        : await listPublishedRoutes(dbConnection, { topicSlug: topic, sort, take, skip });
 
     return Promise.all(rows.map(formatRouteCard));
 }, { code: 'ERROR_GETTING_ROUTES', message: 'Hubo un error al intentar obtener las rutas' });
+
+/**
+ * La mitad de rutas de /search. Vive en este modulo y no en `search` por el mismo motivo que
+ * listPublicRoutesOfUser: el SQL de rutas y formatRouteCard son de aqui, y search solo compone.
+ */
+export const searchRoutes = withServiceError(async ({ words, term, termLike, take, skip }) => {
+    const rows = await searchPublishedRoutes(dbConnection, { words, term, termLike, take, skip });
+
+    return Promise.all(rows.map(formatRouteCard));
+}, { code: 'ERROR_SEARCHING_ROUTES', message: 'Hubo un error al intentar buscar rutas' });
 
 /**
  * Las rutas publicas de un autor, para su perfil. Vive aqui y no en users porque el SQL de
