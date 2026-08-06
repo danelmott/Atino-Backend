@@ -4,6 +4,7 @@ import {
     submitQuizAttempt,
     getQuizAttempts,
     getRouteProgressForUser,
+    getMyProgress,
 } from './progress.services.js';
 
 export const complete = async (req, res) => {
@@ -24,4 +25,8 @@ export const attempts = async (req, res) => {
 
 export const progress = async (req, res) => {
     return res.status(200).json({ progress: await getRouteProgressForUser(req.user, req.params.id) });
+}
+
+export const myProgress = async (req, res) => {
+    return res.status(200).json({ progress: await getMyProgress(req.user, req.query) });
 }

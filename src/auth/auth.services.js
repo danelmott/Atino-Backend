@@ -204,7 +204,9 @@ export const verifyRegisterCode = withServiceError(async (email, code) => {
         await createRefreshToken({ userId: user.id, token: refreshToken, expiresAt }, client);
     });
 
-    return { accessToken, refreshToken };
+    // Se devuelve tambien el usuario: verificar es el momento en que nace la sesion, asi que
+    // el controlador puede responder el perfil igual que hace login.
+    return { accessToken, refreshToken, user };
 }, { code: 'ERROR_VERIFICATING_EMAIL', message: 'Hubo un error al intentar verificar el email' });
 
 export const resendVerifyCode = withServiceError(async (email) => {

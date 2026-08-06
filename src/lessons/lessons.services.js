@@ -78,7 +78,7 @@ export const createLesson = withServiceError(async (user, routeId, payload) => {
         await recordActivity(client, {
             userId: user.userId,
             eventType: 'LESSON_CREATED',
-            subjectId: created.id,
+            targetId: created.id,
         });
 
         return { lesson: created, rows: inserted };

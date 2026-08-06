@@ -12,7 +12,18 @@ export const authSchema = z.object({
 });
 
 
-export const loginSchema = authSchema;
+/**
+ * El login NO reutiliza authSchema.
+ *
+ * Validar aqui el formato de la contraseña tiene dos efectos malos: endurecer la politica deja
+ * fuera a los que ya existen -- con un 400 sobre caracteres especiales en vez de un fallo de
+ * autenticacion --, y le cuenta la politica a cualquiera que sondee el endpoint. Lo unico que
+ * importa al entrar es que venga algo; si es la correcta lo dice bcrypt.
+ */
+export const loginSchema = z.object({
+    email: emailField,
+    password: z.string().min(1, "La contraseña es obligatoria"),
+});
 
 export const validationAccountSchema = z.object({
     email: emailField,

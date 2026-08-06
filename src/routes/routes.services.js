@@ -11,13 +11,14 @@ import {
     findRouteById,
     getRouteOutline,
     listPublishedRoutes,
+    searchPublishedRoutes,
+    listPublicRoutesByUser,
     listRoutesByUser,
     updateRouteById,
     publishRouteById,
     countRouteLessons,
-    replaceRouteTopics,
-    getRouteTopics,
-    listTopics,
+    findSubjectBySlug,
+    listSubjects,
 } from './routes.queries.js';
 
 const isAdminRole = (role) => role === 'ADMIN';
@@ -25,27 +26,66 @@ const isAdminRole = (role) => role === 'ADMIN';
 /** Se lanza sin await: si falla, la key sigue encolada y el worker la reintenta. */
 const drainInBackground = () => { drainPendingDeletions().catch(() => {}); };
 
-const formatRouteCard = async (row) => ({
-    id: row.id,
-    title: row.title,
-    description: row.description,
-    image: await urlOfReading(row.image),
-    isPublished: row.is_published,
-    ratingAvg: Number(row.rating_avg ?? 0),
-    ratingCount: row.rating_count,
-    enrollmentCount: row.enrollment_count,
-    completionCount: row.completion_count,
-    createdAt: row.created_at,
-    ...(row.author_name ? { author: { name: row.author_name } } : {}),
+/**
+ * Sin `id`: el slug ES la clave, y era lo unico que el cliente miraba de este objeto. `name`
+ * sigue viajando porque es la etiqueta con tildes, lo unico que el slug no lleva.
+ *
+ * Las filas de listado lo traen resuelto por el JOIN; las que salen de un INSERT o un UPDATE
+ * traen el slug pero no el nombre, y en ese caso el service lo completa antes de formatear.
+ */
+const formatSubject = (row) => (row.subject_slug
+    ? { slug: row.subject_slug, name: row.subject_name }
+    : null);
+
+/**
+ * El autor de la tarjeta, o null cuando la consulta no lo trae -- listRoutesByUser es el "mis
+ * rutas" del propio autor y no hace JOIN con users, porque ahi ya se sabe de quien son.
+ *
+ * Se mira author_id y NO author_name: `users.name` es nullable, asi que un autor que aun no ha
+ * pasado por el onboarding dejaria la tarjeta sin autor y sin enlace a su perfil. undefined
+ * distingue "la columna no se ha pedido" de "el usuario no tiene nombre todavia".
+ */
+const formatAuthor = async (row) => (row.author_id === undefined ? null : {
+    id: row.author_id,
+    name: row.author_name,
+    // El handle con el que el front enruta el perfil. Sin el, la tarjeta no puede enlazar a
+    // quien la ha escrito.
+    username: row.author_username,
+    image: await urlOfReading(row.author_image),
+    verified: row.author_verified,
 });
 
-export const getTopics = withServiceError(async () => {
-    return listTopics(dbConnection);
-}, { code: 'ERROR_GETTING_TOPICS', message: 'Hubo un error al intentar obtener las categorias' });
+export const formatRouteCard = async (row) => {
+    const author = await formatAuthor(row);
 
-export const createRoute = withServiceError(async (user, { title, description, image, topicIds }) => {
+    return {
+        id: row.id,
+        title: row.title,
+        description: row.description,
+        image: await urlOfReading(row.image),
+        isPublished: row.is_published,
+        subject: formatSubject(row),
+        ratingAvg: Number(row.rating_avg ?? 0),
+        ratingCount: row.rating_count,
+        enrollmentCount: row.enrollment_count,
+        completionCount: row.completion_count,
+        createdAt: row.created_at,
+        ...(author ? { author } : {}),
+    };
+};
+
+export const getSubjects = withServiceError(async () => {
+    return listSubjects(dbConnection);
+}, { code: 'ERROR_GETTING_SUBJECTS', message: 'Hubo un error al intentar obtener las materias' });
+
+export const createRoute = withServiceError(async (user, { title, description, image, subject }) => {
     // Antes de guardar la key hay que confirmar que el objeto existe y es del usuario.
     if (isStorageKey(image)) await verifyUpload(user, image, 'route-cover');
+
+    // Se comprueba aparte en vez de dejar que reviente la FK: un 23503 no esta en
+    // ERROR_STATUS y saldria como un 500. De paso trae el nombre, que el INSERT no resuelve.
+    const found = await findSubjectBySlug(dbConnection, subject);
+    if (!found) throw { code: 'SUBJECT_NOT_FOUND', message: 'La materia elegida no existe' };
 
     const route = await withTransaction(async (client) => {
         const created = await insertRoute(client, {
@@ -53,22 +93,21 @@ export const createRoute = withServiceError(async (user, { title, description, i
             title,
             description: description ?? null,
             image: image ?? null,
+            subjectSlug: subject,
         });
-
-        await replaceRouteTopics(client, created.id, topicIds ?? []);
 
         // Ultima sentencia de la transaccion, por el orden de locks: ver recordActivity.
         // Crear no da XP, pero pinta cuadrito en el heatmap y mantiene viva la racha.
         await recordActivity(client, {
             userId: user.userId,
             eventType: 'ROUTE_CREATED',
-            subjectId: created.id,
+            targetId: created.id,
         });
 
         return created;
     });
 
-    return { ...(await formatRouteCard(route)), topics: [] };
+    return formatRouteCard({ ...route, subject_name: found.name });
 }, { code: 'ERROR_CREATING_ROUTE', message: 'Hubo un error al intentar crear la ruta' });
 
 export const getRoute = withServiceError(async (user, routeId) => {
@@ -81,28 +120,51 @@ export const getRoute = withServiceError(async (user, routeId) => {
         throw { code: 'ROUTE_NOT_FOUND', message: 'No fue posible encontrar la ruta' };
     }
 
-    const [items, topics] = await Promise.all([
-        getRouteOutline(dbConnection, routeId),
-        getRouteTopics(dbConnection, routeId),
-    ]);
+    const items = await getRouteOutline(dbConnection, routeId);
 
-    return {
-        ...(await formatRouteCard(route)),
-        author: { name: route.author_name, image: await urlOfReading(route.author_image) },
-        topics,
-        items,
-    };
+    // El author ya lo arma formatRouteCard a partir de las mismas columnas: antes se repetia
+    // aqui, y era la via por la que el detalle podia acabar emitiendo una ficha del autor
+    // distinta de la que emite la tarjeta.
+    return { ...(await formatRouteCard(route)), items };
 }, { code: 'ERROR_GETTING_ROUTE', message: 'Hubo un error al intentar obtener la ruta' });
 
-export const listRoutes = withServiceError(async (user, { mine, take, skip }) => {
+export const listRoutes = withServiceError(async (user, { mine, subject, sort, take, skip }) => {
     const rows = mine
         ? await listRoutesByUser(dbConnection, { userId: user.userId, take, skip })
-        : await listPublishedRoutes(dbConnection, { take, skip });
+        : await listPublishedRoutes(dbConnection, { subjectSlug: subject, sort, take, skip });
 
     return Promise.all(rows.map(formatRouteCard));
 }, { code: 'ERROR_GETTING_ROUTES', message: 'Hubo un error al intentar obtener las rutas' });
 
-export const updateRoute = withServiceError(async (user, routeId, { title, description, topicIds }) => {
+/**
+ * La mitad de rutas de /search. Vive en este modulo y no en `search` por el mismo motivo que
+ * listPublicRoutesOfUser: el SQL de rutas y formatRouteCard son de aqui, y search solo compone.
+ */
+export const searchRoutes = withServiceError(async ({ words, term, termLike, take, skip }) => {
+    const rows = await searchPublishedRoutes(dbConnection, { words, term, termLike, take, skip });
+
+    return Promise.all(rows.map(formatRouteCard));
+}, { code: 'ERROR_SEARCHING_ROUTES', message: 'Hubo un error al intentar buscar rutas' });
+
+/**
+ * Las rutas publicas de un autor, para su perfil. Vive aqui y no en users porque el SQL de
+ * rutas y formatRouteCard son de este modulo; users solo pone la URL.
+ */
+export const listPublicRoutesOfUser = withServiceError(async (userId, { take, skip }) => {
+    const rows = await listPublicRoutesByUser(dbConnection, { userId, take, skip });
+
+    return Promise.all(rows.map(formatRouteCard));
+}, { code: 'ERROR_GETTING_ROUTES', message: 'Hubo un error al intentar obtener las rutas' });
+
+export const updateRoute = withServiceError(async (user, routeId, { title, description, subject }) => {
+    // Se comprueba antes de abrir la transaccion: si la materia no existe, la FK abortaria
+    // con un 23503 que el errorHandler no mapea y saldria como un 500.
+    let found = null;
+    if (subject) {
+        found = await findSubjectBySlug(dbConnection, subject);
+        if (!found) throw { code: 'SUBJECT_NOT_FOUND', message: 'La materia elegida no existe' };
+    }
+
     const updated = await withTransaction(async (client) => {
         const row = await updateRouteById(client, {
             id: routeId,
@@ -110,15 +172,19 @@ export const updateRoute = withServiceError(async (user, routeId, { title, descr
             isAdmin: isAdminRole(user.role),
             title: title ?? null,
             description: description ?? null,
+            subjectSlug: subject ?? null,
         });
 
         if (!row) throw { code: 'ROUTE_NOT_FOUND', message: 'No fue posible encontrar la ruta que intentas editar' };
 
-        if (topicIds) await replaceRouteTopics(client, routeId, topicIds);
         return row;
     });
 
-    return { ...(await formatRouteCard(updated)), topics: await getRouteTopics(dbConnection, routeId) };
+    // El UPDATE devuelve el slug pero no la etiqueta. Si la materia venia en la peticion ya la
+    // tenemos de la comprobacion de arriba; si no venia, hay que resolver la que quedo puesta.
+    const resolved = found ?? await findSubjectBySlug(dbConnection, updated.subject_slug);
+
+    return formatRouteCard({ ...updated, subject_name: resolved?.name ?? null });
 }, { code: 'ERROR_UPDATING_ROUTE', message: 'Hubo un error al intentar editar la ruta' });
 
 export const setRouteVisibility = withServiceError(async (user, routeId, status) => {
@@ -143,7 +209,7 @@ export const setRouteVisibility = withServiceError(async (user, routeId, status)
             await recordActivity(client, {
                 userId: user.userId,
                 eventType: 'ROUTE_PUBLISHED',
-                subjectId: row.id,
+                targetId: row.id,
             });
         }
 

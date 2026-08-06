@@ -34,22 +34,22 @@ export const lockUserStats = async (client, userId) => {
 }
 
 /** Solo mira filas con xp > 0: las de 0 XP son las del heatmap y si pueden repetirse. */
-export const hasEarnedXpFor = async (client, { userId, eventType, subjectId }) => {
+export const hasEarnedXpFor = async (client, { userId, eventType, targetId }) => {
     const { rows } = await client.query(
         `SELECT 1 FROM activity_events
-          WHERE user_id = $1 AND event_type = $2 AND subject_id = $3 AND xp > 0`,
-        [userId, eventType, subjectId]
+          WHERE user_id = $1 AND event_type = $2 AND target_id = $3 AND xp > 0`,
+        [userId, eventType, targetId]
     );
 
     return rows.length > 0;
 }
 
-export const insertActivityEvent = async (client, { userId, eventType, subjectId, xp, activityDate }) => {
+export const insertActivityEvent = async (client, { userId, eventType, targetId, xp, activityDate }) => {
     const { rows } = await client.query(
-        `INSERT INTO activity_events (user_id, event_type, subject_id, xp, activity_date)
+        `INSERT INTO activity_events (user_id, event_type, target_id, xp, activity_date)
          VALUES ($1, $2, $3, $4, $5::date)
          RETURNING id, xp, to_char(activity_date, 'YYYY-MM-DD') AS activity_date`,
-        [userId, eventType, subjectId, xp, activityDate]
+        [userId, eventType, targetId, xp, activityDate]
     );
 
     return rows[0];
@@ -153,7 +153,7 @@ export const incrementCohortCount = async (client, cohortId) => {
  */
 export const findUserStats = async (client, userId) => {
     const { rows } = await client.query(
-        `SELECT u.id, u.name, u.image,
+        `SELECT u.id, u.name, u.username, u.image, u.is_verified,
                 COALESCE(s.xp, 0)             AS xp,
                 COALESCE(s.current_streak, 0) AS current_streak,
                 COALESCE(s.longest_streak, 0) AS longest_streak,
@@ -227,7 +227,7 @@ export const findSeasonMembership = async (client, { season, userId }) => {
 /** RANK() y no ROW_NUMBER(): dos usuarios con el mismo XP comparten posicion. */
 export const listCohort = async (client, cohortId) => {
     const { rows } = await client.query(
-        `SELECT m.user_id, u.name, u.image, m.xp,
+        `SELECT m.user_id, u.name, u.username, u.image, u.is_verified, m.xp, m.league,
                 RANK() OVER (ORDER BY m.xp DESC)::int AS position
            FROM ranking_members m JOIN users u ON u.id = m.user_id
           WHERE m.cohort_id = $1
@@ -270,7 +270,7 @@ export const getGlobalStanding = async (client, xp) => {
 /** La ventana de RANK() se calcula antes del LIMIT, asi que las posiciones son absolutas. */
 export const listGlobalRanking = async (client, { take, skip }) => {
     const { rows } = await client.query(
-        `SELECT s.user_id, u.name, u.image, s.xp, s.current_streak,
+        `SELECT s.user_id, u.name, u.username, u.image, u.is_verified, s.xp, s.current_streak,
                 RANK() OVER (ORDER BY s.xp DESC)::int AS position
            FROM user_stats s JOIN users u ON u.id = s.user_id
           ORDER BY s.xp DESC, u.name

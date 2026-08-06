@@ -29,7 +29,7 @@ import {
  * Solo dan XP las TERMINACIONES. Crear contenido pinta cuadrito en el heatmap y mantiene
  * la racha, pero paga 0. Eso es lo que permite no tener ningun tope diario de XP: un tope
  * castiga al usuario nuevo que quiere ponerse al dia en un fin de semana, y aqui la unica
- * forma de ganar es terminar cosas, que ya esta deduplicada por subject_id.
+ * forma de ganar es terminar cosas, que ya esta deduplicada por target_id.
  */
 export const XP_RULES = {
     LESSON_COMPLETED: { xp: 10 },
@@ -87,11 +87,11 @@ export const formatLeague = (xp) => {
  * Cuanto paga este evento. Devuelve 0 -- que significa "cuenta para el heatmap y la racha,
  * pero no para el ranking" -- en tres casos:
  *   - el evento no puntua (crear, publicar, puntuar);
- *   - el usuario ya cobro por ese mismo sujeto (rehacer una leccion no paga dos veces);
+ *   - el usuario ya cobro por esa misma entidad (rehacer una leccion no paga dos veces);
  *   - el contenido es suyo, para que el autor de una ruta de 50 lecciones no pueda
  *     autopagarse recorriendola con las respuestas en la mano.
  */
-const resolveXp = async (client, { userId, eventType, subjectId, ownerId, score, totalXp }) => {
+const resolveXp = async (client, { userId, eventType, targetId, ownerId, score, totalXp }) => {
     const rule = XP_RULES[eventType];
     if (!rule) throw { code: 'UNKNOWN_ACTIVITY_EVENT', message: `Evento de actividad desconocido: ${eventType}` };
 
@@ -99,7 +99,7 @@ const resolveXp = async (client, { userId, eventType, subjectId, ownerId, score,
     if (base <= 0) return 0;
 
     if (ownerId && ownerId === userId) return 0;
-    if (await hasEarnedXpFor(client, { userId, eventType, subjectId })) return 0;
+    if (await hasEarnedXpFor(client, { userId, eventType, targetId })) return 0;
 
     // Nunca menos de 1: un evento que puntua siempre tiene que notarse.
     return Math.max(1, Math.round(base * leagueOf(totalXp).multiplier));
@@ -135,15 +135,15 @@ const addToSeason = async (client, { season, userId, xp, league }) => {
  * .code, asi que la transaccion aborta igual, pero el cliente veria "error al registrar la
  * actividad" cuando lo que fallo de verdad fue crear la ruta.
  */
-export const recordActivity = async (client, { userId, eventType, subjectId, ownerId = null, score = null }) => {
+export const recordActivity = async (client, { userId, eventType, targetId, ownerId = null, score = null }) => {
     const stats = await lockUserStats(client, userId);
 
     const xp = await resolveXp(client, {
-        userId, eventType, subjectId, ownerId, score, totalXp: stats.xp,
+        userId, eventType, targetId, ownerId, score, totalXp: stats.xp,
     });
 
     await insertActivityEvent(client, {
-        userId, eventType, subjectId, xp, activityDate: stats.today,
+        userId, eventType, targetId, xp, activityDate: stats.today,
     });
 
     const updated = await applyActivityToStats(client, { userId, xp, day: stats.today });
@@ -172,7 +172,13 @@ export const recordActivity = async (client, { userId, eventType, subjectId, own
 // ============================================================
 
 const formatStats = async (row, counters) => ({
-    user: { id: row.id, name: row.name, image: await urlOfReading(row.image) },
+    user: {
+        id: row.id,
+        name: row.name,
+        username: row.username,
+        image: await urlOfReading(row.image),
+        verified: row.is_verified,
+    },
     xp: row.xp,
     league: formatLeague(row.xp),
     currentStreak: row.current_streak,
@@ -268,13 +274,45 @@ export const currentSeason = () => new Date().toISOString().slice(0, 7);
 const percentBeaten = ({ beaten, total }) =>
     (total > 1 ? Math.round((beaten / (total - 1)) * 1000) / 10 : 100);
 
-const formatRankRow = async (row) => ({
+const formatRankUser = async (row) => ({
+    id: row.user_id,
+    name: row.name,
+    // Cada fila del ranking enlaza al perfil, y el front enruta por handle.
+    username: row.username,
+    image: await urlOfReading(row.image),
+    verified: row.is_verified,
+});
+
+/**
+ * El ranking global va con el XP DE POR VIDA: es el mismo numero que decide la liga, asi que
+ * formatLeague(row.xp) es correcto aqui.
+ */
+const formatGlobalRow = async (row) => ({
     position: row.position,
-    user: { id: row.user_id, name: row.name, image: await urlOfReading(row.image) },
+    user: await formatRankUser(row),
     xp: row.xp,
     ...(row.current_streak !== undefined ? { currentStreak: row.current_streak } : {}),
     league: formatLeague(row.xp),
 });
+
+/**
+ * La cohorte va con el XP DE LA TEMPORADA, que arranca en cero cada mes. Se emite como
+ * `seasonXp` y no como `xp` para que no se pueda confundir con el acumulado: son dos
+ * magnitudes distintas y mezclarlas dejaria el ranking mensual congelado.
+ *
+ * Y la liga sale de ranking_members.league, la que se congelo al entrar en la temporada, NO de
+ * formatLeague(seasonXp): con el XP del mes, el dia 1 todo el mundo seria Bronce.
+ */
+const formatCohortRow = async (row) => {
+    const league = LEAGUES[row.league] ?? LEAGUES[0];
+
+    return {
+        position: row.position,
+        user: await formatRankUser(row),
+        seasonXp: row.xp,
+        league: { level: league.level, name: league.name, label: league.label },
+    };
+};
 
 /** La cohorte del usuario en una temporada: contra quienes compite este mes. */
 export const getSeasonRanking = withServiceError(async (userId, season) => {
@@ -292,7 +330,7 @@ export const getSeasonRanking = withServiceError(async (userId, season) => {
         joined: true,
         league: LEAGUES[membership.league] ?? LEAGUES[0],
         cohortSize: rows.length,
-        members: await Promise.all(rows.map(formatRankRow)),
+        members: await Promise.all(rows.map(formatCohortRow)),
     };
 }, { code: 'ERROR_GETTING_RANKING', message: 'Hubo un error al intentar obtener el ranking' });
 
@@ -339,5 +377,5 @@ export const getMyStanding = withServiceError(async (userId, season) => {
 export const getGlobalRanking = withServiceError(async ({ take, skip }) => {
     const rows = await listGlobalRanking(dbConnection, { take, skip });
 
-    return Promise.all(rows.map(formatRankRow));
+    return Promise.all(rows.map(formatGlobalRow));
 }, { code: 'ERROR_GETTING_RANKING', message: 'Hubo un error al intentar obtener el ranking' });
