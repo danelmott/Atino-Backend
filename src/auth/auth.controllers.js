@@ -1,4 +1,5 @@
 import passport from 'passport';
+import { logger } from '../lib/logger.js';
 import {
     registerUser,
     verifyRegisterCode,
@@ -43,7 +44,22 @@ const authenticateLocal = (req, res) => new Promise((resolve, reject) => {
 export const login = async (req, res) => {
     const { user, info } = await authenticateLocal(req, res);
 
-    if (!user) throw { code: 'INVALID_CREDENTIALS', message: info?.message ?? 'Credenciales invalidas' };
+    if (!user) {
+        // Se reenvia porque el codigo del registro caduca a los 15 minutos, y sin sonar el
+        // fallo: un correo caido no puede tapar el motivo real del rechazo.
+        if (info?.code === 'EMAIL_NOT_VERIFIED') {
+            try {
+                await resendVerifyCode(req.body.email);
+            }
+            catch (error) {
+                logger.warn({ err: error }, 'auth.login.resend_failed');
+            }
+
+            throw { code: 'EMAIL_NOT_VERIFIED', message: info.message };
+        }
+
+        throw { code: 'INVALID_CREDENTIALS', message: info?.message ?? 'Credenciales invalidas' };
+    }
 
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
@@ -91,5 +107,7 @@ export const googleCallback = async (req, res) => {
     await saveRefreshToken(user.id, refreshToken);
 
     setTokenCookies(res, accessToken, refreshToken);
-    return res.redirect(process.env.CLIENT_URL);
+
+    // Dentro de /app y no a la raiz: en la landing no hay avatar ni modal de onboarding.
+    return res.redirect(`${process.env.CLIENT_URL}/app/home`);
 }

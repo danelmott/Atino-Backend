@@ -1,19 +1,10 @@
 -- Up Migration
 
--- El catalogo de materias pasa a llamarse `subjects` y a tener el SLUG como clave primaria.
+-- `topics` pasa a `subjects` y el SLUG pasa a ser la clave primaria.
 --
--- El uuid no aportaba nada: son catorce filas fijas que nadie crea, nadie borra y nadie
--- renombra, y `slug` ya era NOT NULL UNIQUE, o sea ya era una clave natural valida. Lo que si
--- costaba era el cliente, que trabaja en slugs de punta a punta -- de ahi salen etiqueta,
--- icono, banner, tinte y el orden de la rejilla -- y tenia que pedir el catalogo entero por red
--- solo para traducir 'matematicas' a un uuid antes de poder mandar nada.
---
--- Con el slug como clave, `PUT /users/me/onboarding` recibe { name, subjects: ['matematicas'] }
--- y no hay traduccion que hacer. listPublishedRoutes ya filtraba por slug, asi que la mitad del
--- contrato ya iba por aqui.
---
--- Las FK llevan ON UPDATE CASCADE ademas del ON DELETE: con una clave sintetica eso era
--- decorativo, con una natural no.
+-- Son catorce filas fijas que nadie crea ni renombra, y `slug` ya era NOT NULL UNIQUE: el uuid
+-- solo obligaba al cliente a pedir el catalogo entero para traducir 'matematicas' antes de
+-- poder mandar nada. Las FK llevan ON UPDATE CASCADE porque una clave natural si se renombra.
 
 CREATE TABLE subjects (
     slug       TEXT        PRIMARY KEY,
@@ -98,14 +89,11 @@ DROP TABLE topics;
 --  DESAMBIGUACION EN GAMIFICACION
 -- ============================================================
 
--- `activity_events.subject_id` NO es una materia: es el id de la ruta, leccion o quiz a la que
--- se refiere el evento. Con `subjects` ocupando ahora la palabra, dejarlo asi enfrentaria
--- `subject_id` (= id de una ruta) contra `subject_slug` (= materia) en el mismo repo para
--- siempre. Se renombra a `target_id`, que es lo que siempre significo.
+-- `subject_id` nunca fue una materia: es el id de la ruta, leccion o quiz del evento. Con
+-- `subjects` ocupando la palabra, quedaria enfrentado a `subject_slug` para siempre.
 --
--- El indice uq_activity_events_xp_once -- el que impide cobrar XP dos veces por lo mismo -- no
--- hay que recrearlo: Postgres guarda las columnas del indice por numero de atributo, asi que un
--- RENAME COLUMN lo sigue solo y su definicion pasa a nombrar target_id.
+-- uq_activity_events_xp_once no hay que recrearlo: Postgres guarda las columnas del indice por
+-- numero de atributo, asi que el RENAME lo sigue solo.
 ALTER TABLE activity_events RENAME COLUMN subject_id TO target_id;
 
 

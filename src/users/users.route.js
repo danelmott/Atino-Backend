@@ -32,19 +32,10 @@ usersRouter.get('/me', asyncHandler(me));
 usersRouter.patch('/me', validate(updateProfileSchema), asyncHandler(updateMe));
 usersRouter.patch('/me/timezone', validate(updateTimezoneSchema), asyncHandler(timezone));
 
-// El alta: nombre e intereses juntos, y el unico que marca el onboarding como completado.
 usersRouter.put('/me/onboarding', validate(completeOnboardingSchema), asyncHandler(onboarding));
 
-// PUT y no POST: es un reemplazo completo e idempotente. Este es el de editar los intereses
-// despues desde ajustes, y a proposito NO marca el onboarding.
-usersRouter.put('/me/subjects', validate(setSubjectsSchema), asyncHandler(subjects));
 
-// Debajo de todo lo de /me, igual que routesRouter declara /subjects encima de /:id: si fuera
-// al reves, /users/me entraria por aqui, fallaria la validacion de uuid y responderia un 400
-// en vez del perfil propio.
-// Sin validate() a proposito: la forma del id la comprueba getPublicProfile, que responde 404
-// y no el 400 de zod, porque es la pantalla que hace notFound() en el cliente. Los sub-recursos
-// de abajo si validan: a ellos solo se llega con un id que el perfil ya resolvio.
+usersRouter.put('/me/subjects', validate(setSubjectsSchema), asyncHandler(subjects));
 usersRouter.get('/:userId', asyncHandler(profile));
 usersRouter.get(
     '/:userId/routes',
@@ -53,8 +44,7 @@ usersRouter.get(
     asyncHandler(userRoutes)
 );
 
-// La insignia de verificado es editorial: solo un ADMIN la pone y la quita. Primer uso real
-// de requireRole, que hasta ahora estaba escrito y sin cablear en ningun router.
+
 usersRouter.patch(
     '/:userId/verified',
     requireRole('ADMIN'),

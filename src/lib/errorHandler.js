@@ -5,6 +5,8 @@ const ERROR_STATUS = {
     USER_ALREADY_EXISTS: 409,
     USER_NOT_FOUND: 404,
     EMAIL_ALREADY_VERIFIED: 409,
+    // 403 y no 401: las credenciales son correctas, solo falta confirmar el correo.
+    EMAIL_NOT_VERIFIED: 403,
     VERIFICATION_CODE_NOT_FOUND: 404,
     VERIFICATION_EXPIRED: 410,
     INVALID_VERIFICATION_CODE: 400,

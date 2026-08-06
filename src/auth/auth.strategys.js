@@ -70,7 +70,14 @@ const localStrategyFunction = () => {
 
                     if(!valid) return done(null, false, {message: 'Credenciales invalidas'});
 
-                    if(!user.email_verified) return done(null, false /*escribir error*/);
+                    // Con `info` propio: sin el, el controlador cae en su `??` y esto sale como
+                    // INVALID_CREDENTIALS, indistinguible de una contraseña mala.
+                    if (!user.email_verified) {
+                        return done(null, false, {
+                            code: 'EMAIL_NOT_VERIFIED',
+                            message: 'Verifica tu correo para poder entrar',
+                        });
+                    }
 
                     return done(null, user);
                 }
