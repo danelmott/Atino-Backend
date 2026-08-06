@@ -107,7 +107,7 @@ export const createQuiz = withServiceError(async (user, routeId, payload) => {
         await recordActivity(client, {
             userId: user.userId,
             eventType: 'QUIZ_CREATED',
-            subjectId: created.id,
+            targetId: created.id,
         });
 
         return { quiz: created, rows };

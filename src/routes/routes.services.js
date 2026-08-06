@@ -17,8 +17,8 @@ import {
     updateRouteById,
     publishRouteById,
     countRouteLessons,
-    findTopicById,
-    listTopics,
+    findSubjectBySlug,
+    listSubjects,
 } from './routes.queries.js';
 
 const isAdminRole = (role) => role === 'ADMIN';
@@ -27,11 +27,14 @@ const isAdminRole = (role) => role === 'ADMIN';
 const drainInBackground = () => { drainPendingDeletions().catch(() => {}); };
 
 /**
- * Las filas de listado traen el topic ya resuelto por el JOIN; las que salen de un INSERT o
- * un UPDATE solo traen topic_id, y en ese caso el service lo completa antes de formatear.
+ * Sin `id`: el slug ES la clave, y era lo unico que el cliente miraba de este objeto. `name`
+ * sigue viajando porque es la etiqueta con tildes, lo unico que el slug no lleva.
+ *
+ * Las filas de listado lo traen resuelto por el JOIN; las que salen de un INSERT o un UPDATE
+ * traen el slug pero no el nombre, y en ese caso el service lo completa antes de formatear.
  */
-const formatTopic = (row) => (row.topic_slug
-    ? { id: row.topic_id, slug: row.topic_slug, name: row.topic_name }
+const formatSubject = (row) => (row.subject_slug
+    ? { slug: row.subject_slug, name: row.subject_name }
     : null);
 
 /**
@@ -61,7 +64,7 @@ export const formatRouteCard = async (row) => {
         description: row.description,
         image: await urlOfReading(row.image),
         isPublished: row.is_published,
-        topic: formatTopic(row),
+        subject: formatSubject(row),
         ratingAvg: Number(row.rating_avg ?? 0),
         ratingCount: row.rating_count,
         enrollmentCount: row.enrollment_count,
@@ -71,24 +74,18 @@ export const formatRouteCard = async (row) => {
     };
 };
 
-/** Convierte un topic suelto en las columnas que espera formatTopic. */
-const withTopicColumns = (row, topic) => ({
-    ...row,
-    topic_id: topic.id,
-    topic_slug: topic.slug,
-    topic_name: topic.name,
-});
+export const getSubjects = withServiceError(async () => {
+    return listSubjects(dbConnection);
+}, { code: 'ERROR_GETTING_SUBJECTS', message: 'Hubo un error al intentar obtener las materias' });
 
-export const getTopics = withServiceError(async () => {
-    return listTopics(dbConnection);
-}, { code: 'ERROR_GETTING_TOPICS', message: 'Hubo un error al intentar obtener las categorias' });
-
-export const createRoute = withServiceError(async (user, { title, description, image, topicId }) => {
+export const createRoute = withServiceError(async (user, { title, description, image, subject }) => {
     // Antes de guardar la key hay que confirmar que el objeto existe y es del usuario.
     if (isStorageKey(image)) await verifyUpload(user, image, 'route-cover');
 
-    const topic = await findTopicById(dbConnection, topicId);
-    if (!topic) throw { code: 'TOPIC_NOT_FOUND', message: 'La categoria elegida no existe' };
+    // Se comprueba aparte en vez de dejar que reviente la FK: un 23503 no esta en
+    // ERROR_STATUS y saldria como un 500. De paso trae el nombre, que el INSERT no resuelve.
+    const found = await findSubjectBySlug(dbConnection, subject);
+    if (!found) throw { code: 'SUBJECT_NOT_FOUND', message: 'La materia elegida no existe' };
 
     const route = await withTransaction(async (client) => {
         const created = await insertRoute(client, {
@@ -96,7 +93,7 @@ export const createRoute = withServiceError(async (user, { title, description, i
             title,
             description: description ?? null,
             image: image ?? null,
-            topicId,
+            subjectSlug: subject,
         });
 
         // Ultima sentencia de la transaccion, por el orden de locks: ver recordActivity.
@@ -104,13 +101,13 @@ export const createRoute = withServiceError(async (user, { title, description, i
         await recordActivity(client, {
             userId: user.userId,
             eventType: 'ROUTE_CREATED',
-            subjectId: created.id,
+            targetId: created.id,
         });
 
         return created;
     });
 
-    return formatRouteCard(withTopicColumns(route, topic));
+    return formatRouteCard({ ...route, subject_name: found.name });
 }, { code: 'ERROR_CREATING_ROUTE', message: 'Hubo un error al intentar crear la ruta' });
 
 export const getRoute = withServiceError(async (user, routeId) => {
@@ -131,10 +128,10 @@ export const getRoute = withServiceError(async (user, routeId) => {
     return { ...(await formatRouteCard(route)), items };
 }, { code: 'ERROR_GETTING_ROUTE', message: 'Hubo un error al intentar obtener la ruta' });
 
-export const listRoutes = withServiceError(async (user, { mine, topic, sort, take, skip }) => {
+export const listRoutes = withServiceError(async (user, { mine, subject, sort, take, skip }) => {
     const rows = mine
         ? await listRoutesByUser(dbConnection, { userId: user.userId, take, skip })
-        : await listPublishedRoutes(dbConnection, { topicSlug: topic, sort, take, skip });
+        : await listPublishedRoutes(dbConnection, { subjectSlug: subject, sort, take, skip });
 
     return Promise.all(rows.map(formatRouteCard));
 }, { code: 'ERROR_GETTING_ROUTES', message: 'Hubo un error al intentar obtener las rutas' });
@@ -159,12 +156,13 @@ export const listPublicRoutesOfUser = withServiceError(async (userId, { take, sk
     return Promise.all(rows.map(formatRouteCard));
 }, { code: 'ERROR_GETTING_ROUTES', message: 'Hubo un error al intentar obtener las rutas' });
 
-export const updateRoute = withServiceError(async (user, routeId, { title, description, topicId }) => {
-    // Se comprueba antes de abrir la transaccion: si el subject no existe, la FK abortaria
+export const updateRoute = withServiceError(async (user, routeId, { title, description, subject }) => {
+    // Se comprueba antes de abrir la transaccion: si la materia no existe, la FK abortaria
     // con un 23503 que el errorHandler no mapea y saldria como un 500.
-    if (topicId) {
-        const exists = await findTopicById(dbConnection, topicId);
-        if (!exists) throw { code: 'TOPIC_NOT_FOUND', message: 'La categoria elegida no existe' };
+    let found = null;
+    if (subject) {
+        found = await findSubjectBySlug(dbConnection, subject);
+        if (!found) throw { code: 'SUBJECT_NOT_FOUND', message: 'La materia elegida no existe' };
     }
 
     const updated = await withTransaction(async (client) => {
@@ -174,7 +172,7 @@ export const updateRoute = withServiceError(async (user, routeId, { title, descr
             isAdmin: isAdminRole(user.role),
             title: title ?? null,
             description: description ?? null,
-            topicId: topicId ?? null,
+            subjectSlug: subject ?? null,
         });
 
         if (!row) throw { code: 'ROUTE_NOT_FOUND', message: 'No fue posible encontrar la ruta que intentas editar' };
@@ -182,10 +180,11 @@ export const updateRoute = withServiceError(async (user, routeId, { title, descr
         return row;
     });
 
-    // El UPDATE devuelve topic_id pero no el topic resuelto, y puede no haber cambiado.
-    const topic = await findTopicById(dbConnection, updated.topic_id);
+    // El UPDATE devuelve el slug pero no la etiqueta. Si la materia venia en la peticion ya la
+    // tenemos de la comprobacion de arriba; si no venia, hay que resolver la que quedo puesta.
+    const resolved = found ?? await findSubjectBySlug(dbConnection, updated.subject_slug);
 
-    return formatRouteCard(withTopicColumns(updated, topic));
+    return formatRouteCard({ ...updated, subject_name: resolved?.name ?? null });
 }, { code: 'ERROR_UPDATING_ROUTE', message: 'Hubo un error al intentar editar la ruta' });
 
 export const setRouteVisibility = withServiceError(async (user, routeId, status) => {
@@ -210,7 +209,7 @@ export const setRouteVisibility = withServiceError(async (user, routeId, status)
             await recordActivity(client, {
                 userId: user.userId,
                 eventType: 'ROUTE_PUBLISHED',
-                subjectId: row.id,
+                targetId: row.id,
             });
         }
 

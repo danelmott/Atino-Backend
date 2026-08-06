@@ -10,17 +10,17 @@
 export const recommendRoutes = async (client, { userId, take, skip, weights }) => {
     const { rows } = await client.query(
         `WITH pref AS (
-            SELECT topic_id FROM user_topic_preferences WHERE user_id = $1
+            SELECT subject_slug FROM user_subject_preferences WHERE user_id = $1
          ),
-         -- Afinidad por consumo: de que subjects son las rutas que el usuario ya empezo.
+         -- Afinidad por consumo: de que materias son las rutas que el usuario ya empezo.
          -- Se normaliza contra 5 y se corta en 1 para que alguien con 40 rutas de un mismo
          -- tema no aplaste al resto de senales y acabe viendo siempre lo mismo.
          affinity AS (
-            SELECT r.topic_id, LEAST(COUNT(*)::numeric / 5.0, 1.0) AS norm
+            SELECT r.subject_slug, LEAST(COUNT(*)::numeric / 5.0, 1.0) AS norm
               FROM route_enrollments re
               JOIN routes r ON r.id = re.route_id
              WHERE re.user_id = $1
-             GROUP BY r.topic_id
+             GROUP BY r.subject_slug
          ),
          -- Las que ya termino se excluyen; las empezadas y sin terminar solo bajan.
          mine AS (
@@ -32,16 +32,16 @@ export const recommendRoutes = async (client, { userId, take, skip, weights }) =
             SELECT following_id FROM user_follows WHERE follower_id = $1
          )
          SELECT r.id, r.title, r.description, r.image, r.rating_avg, r.rating_count,
-                r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
+                r.enrollment_count, r.completion_count, r.created_at, r.subject_slug,
                 r.user_id AS author_id,
                 u.name AS author_name,
                 u.username AS author_username,
                 u.is_verified AS author_verified,
                 (f.following_id IS NOT NULL) AS author_followed,
-                t.slug AS topic_slug, t.name AS topic_name,
+                s.name AS subject_name,
                 (mine.route_id IS NOT NULL) AS started,
                 (
-                    $4::numeric * (CASE WHEN p.topic_id      IS NOT NULL THEN 1 ELSE 0 END)
+                    $4::numeric * (CASE WHEN p.subject_slug  IS NOT NULL THEN 1 ELSE 0 END)
                   + $5::numeric * (CASE WHEN f.following_id  IS NOT NULL THEN 1 ELSE 0 END)
                   + $6::numeric * COALESCE(a.norm, 0)
                   -- Amortiguacion bayesiana: sin el factor n/(n+5), una ruta con un solo
@@ -52,10 +52,10 @@ export const recommendRoutes = async (client, { userId, take, skip, weights }) =
                   + $9::numeric * (CASE WHEN mine.route_id  IS NOT NULL THEN 1 ELSE 0 END)
                 ) AS score
            FROM routes r
-           JOIN users  u ON u.id = r.user_id
-           JOIN topics t ON t.id = r.topic_id
-           LEFT JOIN pref     p ON p.topic_id     = r.topic_id
-           LEFT JOIN affinity a ON a.topic_id     = r.topic_id
+           JOIN users    u ON u.id = r.user_id
+           JOIN subjects s ON s.slug = r.subject_slug
+           LEFT JOIN pref     p ON p.subject_slug = r.subject_slug
+           LEFT JOIN affinity a ON a.subject_slug = r.subject_slug
            LEFT JOIN mine       ON mine.route_id  = r.id
            LEFT JOIN followed f ON f.following_id = r.user_id
           WHERE r.is_published = 'PUBLIC'

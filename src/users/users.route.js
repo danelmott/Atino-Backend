@@ -6,7 +6,7 @@ import { requireRole } from '../lib/middlewares/roles.js';
 import {
     updateTimezoneSchema,
     updateProfileSchema,
-    setTopicsSchema,
+    setSubjectsSchema,
     completeOnboardingSchema,
     setVerifiedSchema,
     userIdParamSchema,
@@ -16,7 +16,7 @@ import {
     me,
     updateMe,
     timezone,
-    topics,
+    subjects,
     onboarding,
     profile,
     userRoutes,
@@ -37,9 +37,9 @@ usersRouter.put('/me/onboarding', validate(completeOnboardingSchema), asyncHandl
 
 // PUT y no POST: es un reemplazo completo e idempotente. Este es el de editar los intereses
 // despues desde ajustes, y a proposito NO marca el onboarding.
-usersRouter.put('/me/topics', validate(setTopicsSchema), asyncHandler(topics));
+usersRouter.put('/me/subjects', validate(setSubjectsSchema), asyncHandler(subjects));
 
-// Debajo de todo lo de /me, igual que routesRouter declara /topics encima de /:id: si fuera
+// Debajo de todo lo de /me, igual que routesRouter declara /subjects encima de /:id: si fuera
 // al reves, /users/me entraria por aqui, fallaria la validacion de uuid y responderia un 400
 // en vez del perfil propio.
 // Sin validate() a proposito: la forma del id la comprueba getPublicProfile, que responde 404

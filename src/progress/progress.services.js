@@ -66,7 +66,7 @@ const closeRouteIfDone = async (client, { user, routeId, ownerId }) => {
     return recordActivity(client, {
         userId: user.userId,
         eventType: 'ROUTE_COMPLETED',
-        subjectId: routeId,
+        targetId: routeId,
         ownerId,
     });
 };
@@ -90,7 +90,7 @@ export const markLessonComplete = withServiceError(async (user, lessonId) => {
         const activity = await recordActivity(client, {
             userId: user.userId,
             eventType: 'LESSON_COMPLETED',
-            subjectId: lessonId,
+            targetId: lessonId,
             ownerId: route.user_id,
         });
 
@@ -157,7 +157,7 @@ export const submitQuizAttempt = withServiceError(async (user, quizId, answers) 
         const activity = await recordActivity(client, {
             userId: user.userId,
             eventType: 'QUIZ_COMPLETED',
-            subjectId: quizId,
+            targetId: quizId,
             ownerId: route.user_id,
             score,
         });

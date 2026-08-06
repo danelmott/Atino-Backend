@@ -12,7 +12,7 @@ import { feed } from './feed.controllers.js';
  * OJO: este router va montado ANTES que routesRouter en app.js, al reves que lessons y
  * quizzes. Si va despues, /routes/feed entra por routesRouter.get('/:id'), y como
  * idParamSchema exige un uuid la respuesta es un 400 "Identificador invalido" en vez de la
- * lista. Es el mismo motivo por el que /routes/topics esta declarado encima de /:id.
+ * lista. Es el mismo motivo por el que /routes/subjects esta declarado encima de /:id.
  */
 export const feedRouter = Router();
 

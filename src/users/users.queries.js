@@ -173,39 +173,39 @@ export const updateUserImage = async (userId, image) => {
 
 /* ===================== PREFERENCIAS DE SUBJECTS (ONBOARDING) ===================== */
 
-export const getUserTopicPreferences = async (client, userId) => {
+export const getUserSubjectPreferences = async (client, userId) => {
     const { rows } = await client.query(
-        `SELECT t.id, t.slug, t.name
-           FROM user_topic_preferences utp
-           JOIN topics t ON t.id = utp.topic_id
-          WHERE utp.user_id = $1
-          ORDER BY t.name`,
+        `SELECT s.slug, s.name
+           FROM user_subject_preferences usp
+           JOIN subjects s ON s.slug = usp.subject_slug
+          WHERE usp.user_id = $1
+          ORDER BY s.name`,
         [userId]
     );
 
     return rows;
 }
 
-/** Cuenta cuantos de los ids recibidos existen de verdad, para no escribir basura. */
-export const countExistingTopics = async (client, topicIds) => {
+/** Cuenta cuantos de los slugs recibidos existen de verdad, para no escribir basura. */
+export const countExistingSubjects = async (client, subjectSlugs) => {
     const { rows } = await client.query(
-        `SELECT COUNT(*)::int AS n FROM topics WHERE id = ANY($1::uuid[])`,
-        [topicIds]
+        `SELECT COUNT(*)::int AS n FROM subjects WHERE slug = ANY($1::text[])`,
+        [subjectSlugs]
     );
 
     return rows[0].n;
 }
 
 /** Reemplazo completo: se borra todo y se reinserta, para no tener que diffear en JS. */
-export const replaceUserTopicPreferences = async (client, userId, topicIds) => {
-    await client.query(`DELETE FROM user_topic_preferences WHERE user_id = $1`, [userId]);
-    if (topicIds.length === 0) return;
+export const replaceUserSubjectPreferences = async (client, userId, subjectSlugs) => {
+    await client.query(`DELETE FROM user_subject_preferences WHERE user_id = $1`, [userId]);
+    if (subjectSlugs.length === 0) return;
 
     await client.query(
-        `INSERT INTO user_topic_preferences (user_id, topic_id)
-         SELECT $1, unnest($2::uuid[])
+        `INSERT INTO user_subject_preferences (user_id, subject_slug)
+         SELECT $1, unnest($2::text[])
          ON CONFLICT DO NOTHING`,
-        [userId, topicIds]
+        [userId, subjectSlugs]
     );
 }
 

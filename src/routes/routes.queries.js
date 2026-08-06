@@ -1,13 +1,14 @@
 /**
- * El RETURNING no puede traer el topic ya resuelto (slug, nombre, disciplina) porque un
- * INSERT no admite JOIN, asi que devuelve topic_id y el service lo completa.
+ * El RETURNING no puede traer el nombre de la materia porque un INSERT no admite JOIN, pero
+ * si devuelve el slug, que es la clave: al service solo le falta la etiqueta, y esa ya la
+ * tiene de la comprobacion previa que hace contra el catalogo.
  */
-export const insertRoute = async (client, { userId, title, description, image, topicId }) => {
+export const insertRoute = async (client, { userId, title, description, image, subjectSlug }) => {
     const { rows } = await client.query(
-        `INSERT INTO routes (user_id, title, description, image, topic_id)
+        `INSERT INTO routes (user_id, title, description, image, subject_slug)
          VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, title, description, image, is_published, topic_id, created_at`,
-        [userId, title, description, image, topicId]
+         RETURNING id, title, description, image, is_published, subject_slug, created_at`,
+        [userId, title, description, image, subjectSlug]
     );
 
     return rows[0];
@@ -50,10 +51,10 @@ export const findRouteById = async (client, routeId) => {
         `SELECT r.*, r.user_id AS author_id,
                 u.name AS author_name, u.username AS author_username,
                 u.image AS author_image, u.is_verified AS author_verified,
-                t.slug AS topic_slug, t.name AS topic_name
+                s.name AS subject_name
            FROM routes r
-           JOIN users u  ON u.id = r.user_id
-           JOIN topics t ON t.id = r.topic_id
+           JOIN users u    ON u.id = r.user_id
+           JOIN subjects s ON s.slug = r.subject_slug
           WHERE r.id = $1`,
         [routeId]
     );
@@ -92,33 +93,33 @@ export const getRouteOutline = async (client, routeId) => {
 }
 
 /**
- * El listado publico de /explore. El filtro por materia va por SLUG y no por uuid porque el
- * slug es el contrato con el front -- de el resuelve banner, icono y tinte -- y asi el cliente
- * no necesita conocer los uuids del catalogo.
+ * El listado publico de /explore. El filtro por materia se compara contra la propia columna de
+ * routes y no contra el catalogo: el slug ES la clave ajena, asi que el JOIN a subjects solo
+ * hace falta para traer la etiqueta.
  *
  * Los dos parametros opcionales van dentro de la misma consulta en vez de en ramas separadas:
  * `$3::text IS NULL` neutraliza el filtro cuando no viene materia, y los dos CASE del ORDER BY
  * valen NULL en TODAS las filas cuando el orden es por fecha, asi que no desempatan nada y
  * manda el created_at. Con ramas serian cuatro copias del mismo SELECT.
  */
-export const listPublishedRoutes = async (client, { topicSlug, sort, take, skip }) => {
+export const listPublishedRoutes = async (client, { subjectSlug, sort, take, skip }) => {
     const { rows } = await client.query(
         `SELECT r.id, r.title, r.description, r.image, r.rating_avg, r.rating_count,
-                r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
+                r.enrollment_count, r.completion_count, r.created_at, r.subject_slug,
                 r.user_id AS author_id,
                 u.name AS author_name, u.username AS author_username,
                 u.image AS author_image, u.is_verified AS author_verified,
-                t.slug AS topic_slug, t.name AS topic_name
+                s.name AS subject_name
            FROM routes r
-           JOIN users u  ON u.id = r.user_id
-           JOIN topics t ON t.id = r.topic_id
+           JOIN users u    ON u.id = r.user_id
+           JOIN subjects s ON s.slug = r.subject_slug
           WHERE r.is_published = 'PUBLIC'
-            AND ($3::text IS NULL OR t.slug = $3)
+            AND ($3::text IS NULL OR r.subject_slug = $3)
           ORDER BY CASE WHEN $4::text = 'rating' THEN r.rating_avg   END DESC NULLS LAST,
                    CASE WHEN $4::text = 'rating' THEN r.rating_count END DESC NULLS LAST,
                    r.created_at DESC
           LIMIT $1 OFFSET $2`,
-        [take, skip, topicSlug ?? null, sort ?? 'recent']
+        [take, skip, subjectSlug ?? null, sort ?? 'recent']
     );
 
     return rows;
@@ -140,16 +141,16 @@ export const listPublishedRoutes = async (client, { topicSlug, sort, take, skip 
 export const searchPublishedRoutes = async (client, { words, term, termLike, take, skip }) => {
     const { rows } = await client.query(
         `SELECT r.id, r.title, r.description, r.image, r.rating_avg, r.rating_count,
-                r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
+                r.enrollment_count, r.completion_count, r.created_at, r.subject_slug,
                 r.user_id AS author_id,
                 u.name AS author_name, u.username AS author_username,
                 u.image AS author_image, u.is_verified AS author_verified,
-                t.slug AS topic_slug, t.name AS topic_name
+                s.name AS subject_name
            FROM routes r
-           JOIN users u  ON u.id = r.user_id
-           JOIN topics t ON t.id = r.topic_id
+           JOIN users u    ON u.id = r.user_id
+           JOIN subjects s ON s.slug = r.subject_slug
           WHERE r.is_published = 'PUBLIC'
-            AND lower(atino_unaccent(r.title || ' ' || t.name || ' ' || coalesce(u.name, '')))
+            AND lower(atino_unaccent(r.title || ' ' || s.name || ' ' || coalesce(u.name, '')))
                 LIKE ALL ($3::text[])
           ORDER BY CASE
                        WHEN lower(atino_unaccent(r.title)) = $4                       THEN 4
@@ -173,14 +174,14 @@ export const searchPublishedRoutes = async (client, { words, term, termLike, tak
 export const listPublicRoutesByUser = async (client, { userId, take, skip }) => {
     const { rows } = await client.query(
         `SELECT r.id, r.title, r.description, r.image, r.rating_avg, r.rating_count,
-                r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
+                r.enrollment_count, r.completion_count, r.created_at, r.subject_slug,
                 r.user_id AS author_id,
                 u.name AS author_name, u.username AS author_username,
                 u.image AS author_image, u.is_verified AS author_verified,
-                t.slug AS topic_slug, t.name AS topic_name
+                s.name AS subject_name
            FROM routes r
-           JOIN users u  ON u.id = r.user_id
-           JOIN topics t ON t.id = r.topic_id
+           JOIN users u    ON u.id = r.user_id
+           JOIN subjects s ON s.slug = r.subject_slug
           WHERE r.is_published = 'PUBLIC' AND r.user_id = $1
           ORDER BY r.created_at DESC
           LIMIT $2 OFFSET $3`,
@@ -193,10 +194,10 @@ export const listPublicRoutesByUser = async (client, { userId, take, skip }) => 
 export const listRoutesByUser = async (client, { userId, take, skip }) => {
     const { rows } = await client.query(
         `SELECT r.id, r.title, r.description, r.image, r.is_published, r.rating_avg,
-                r.rating_count, r.enrollment_count, r.completion_count, r.created_at, r.topic_id,
-                t.slug AS topic_slug, t.name AS topic_name
+                r.rating_count, r.enrollment_count, r.completion_count, r.created_at,
+                r.subject_slug, s.name AS subject_name
            FROM routes r
-           JOIN topics t ON t.id = r.topic_id
+           JOIN subjects s ON s.slug = r.subject_slug
           WHERE r.user_id = $1
           ORDER BY r.created_at DESC
           LIMIT $2 OFFSET $3`,
@@ -206,15 +207,15 @@ export const listRoutesByUser = async (client, { userId, take, skip }) => {
     return rows;
 }
 
-export const updateRouteById = async (client, { id, userId, isAdmin, title, description, topicId }) => {
+export const updateRouteById = async (client, { id, userId, isAdmin, title, description, subjectSlug }) => {
     const { rows } = await client.query(
         `UPDATE routes
-            SET title       = COALESCE($4, title),
-                description = COALESCE($5, description),
-                topic_id    = COALESCE($6, topic_id)
+            SET title        = COALESCE($4, title),
+                description  = COALESCE($5, description),
+                subject_slug = COALESCE($6, subject_slug)
           WHERE id = $1 AND (user_id = $2 OR $3 = TRUE)
-          RETURNING id, title, description, image, is_published, topic_id`,
-        [id, userId, isAdmin, title, description, topicId]
+          RETURNING id, title, description, image, is_published, subject_slug`,
+        [id, userId, isAdmin, title, description, subjectSlug]
     );
 
     return rows[0] ?? null;
@@ -241,13 +242,16 @@ export const countRouteLessons = async (client, routeId) => {
 }
 
 /**
- * Se valida el subject aparte en vez de dejar que reviente la FK: un 23503 no esta en el
+ * Se valida la materia aparte en vez de dejar que reviente la FK: un 23503 no esta en el
  * mapa de ERROR_STATUS, asi que saldria como un 500 en lugar de un 404 con su mensaje.
+ *
+ * Hace doble papel desde que el slug es la clave: comprueba que existe Y trae el nombre que el
+ * INSERT/UPDATE no puede resolver por si mismo, asi que no cuesta una consulta de mas.
  */
-export const findTopicById = async (client, topicId) => {
+export const findSubjectBySlug = async (client, subjectSlug) => {
     const { rows } = await client.query(
-        `SELECT id, slug, name FROM topics WHERE id = $1`,
-        [topicId]
+        `SELECT slug, name FROM subjects WHERE slug = $1`,
+        [subjectSlug]
     );
 
     return rows[0] ?? null;
@@ -255,9 +259,9 @@ export const findTopicById = async (client, topicId) => {
 
 // Las catorce materias son un unico nivel, sin agrupacion por encima, asi que el orden es
 // alfabetico. El orden con el que /explore pinta su rejilla es cosa del cliente.
-export const listTopics = async (client) => {
+export const listSubjects = async (client) => {
     const { rows } = await client.query(
-        `SELECT id, slug, name FROM topics ORDER BY name`
+        `SELECT slug, name FROM subjects ORDER BY name`
     );
 
     return rows;

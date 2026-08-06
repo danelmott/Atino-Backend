@@ -42,7 +42,7 @@ const formatFollowState = (counts, isFollowing) => ({
 /**
  * Se comprueba que el usuario existe en vez de dejar que reviente la FK: el 23503 no esta en
  * ERROR_STATUS, asi que saldria como un 500 en lugar de un 404. Mismo patron que createRoute
- * con findTopicById.
+ * con findSubjectBySlug.
  */
 const assertUserExists = async (client, userId) => {
     if (!(await userExists(client, userId))) {

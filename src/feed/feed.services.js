@@ -11,13 +11,13 @@ import { recommendRoutes } from './feed.queries.js';
  * El orden de magnitud importa mas que el valor exacto: preferencia declarada pesa mas que
  * afinidad deducida, que es la senal mas debil de las tres personales.
  *
- * `following` va por debajo de `preference` -- el catalogo entero se organiza por subject --
+ * `following` va por debajo de `preference` -- el catalogo entero se organiza por materia --
  * pero por encima de `affinity`, porque seguir a alguien es una senal declarada y no deducida.
  */
 export const FEED_WEIGHTS = {
-    preference: 5.0,   // el subject de la ruta esta entre los que eligio en el onboarding
+    preference: 5.0,   // la materia de la ruta esta entre las que eligio en el onboarding
     following:  4.0,   // sigue al autor
-    affinity:   3.0,   // ya ha consumido rutas de ese subject
+    affinity:   3.0,   // ya ha consumido rutas de esa materia
     quality:    1.5,   // valoracion media, amortiguada por el numero de votos
     freshness:  1.0,   // decaimiento exponencial, vida media ~30 dias
     enrolled:  -2.0,   // ya empezada: baja en el feed, pero no desaparece
@@ -28,10 +28,9 @@ const formatFeedItem = async (row) => ({
     title: row.title,
     description: row.description,
     image: await urlOfReading(row.image),
-    topic: {
-        id: row.topic_id,
-        slug: row.topic_slug,
-        name: row.topic_name,
+    subject: {
+        slug: row.subject_slug,
+        name: row.subject_name,
     },
     ratingAvg: Number(row.rating_avg ?? 0),
     ratingCount: row.rating_count,

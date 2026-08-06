@@ -29,7 +29,7 @@ import {
  * Solo dan XP las TERMINACIONES. Crear contenido pinta cuadrito en el heatmap y mantiene
  * la racha, pero paga 0. Eso es lo que permite no tener ningun tope diario de XP: un tope
  * castiga al usuario nuevo que quiere ponerse al dia en un fin de semana, y aqui la unica
- * forma de ganar es terminar cosas, que ya esta deduplicada por subject_id.
+ * forma de ganar es terminar cosas, que ya esta deduplicada por target_id.
  */
 export const XP_RULES = {
     LESSON_COMPLETED: { xp: 10 },
@@ -87,11 +87,11 @@ export const formatLeague = (xp) => {
  * Cuanto paga este evento. Devuelve 0 -- que significa "cuenta para el heatmap y la racha,
  * pero no para el ranking" -- en tres casos:
  *   - el evento no puntua (crear, publicar, puntuar);
- *   - el usuario ya cobro por ese mismo sujeto (rehacer una leccion no paga dos veces);
+ *   - el usuario ya cobro por esa misma entidad (rehacer una leccion no paga dos veces);
  *   - el contenido es suyo, para que el autor de una ruta de 50 lecciones no pueda
  *     autopagarse recorriendola con las respuestas en la mano.
  */
-const resolveXp = async (client, { userId, eventType, subjectId, ownerId, score, totalXp }) => {
+const resolveXp = async (client, { userId, eventType, targetId, ownerId, score, totalXp }) => {
     const rule = XP_RULES[eventType];
     if (!rule) throw { code: 'UNKNOWN_ACTIVITY_EVENT', message: `Evento de actividad desconocido: ${eventType}` };
 
@@ -99,7 +99,7 @@ const resolveXp = async (client, { userId, eventType, subjectId, ownerId, score,
     if (base <= 0) return 0;
 
     if (ownerId && ownerId === userId) return 0;
-    if (await hasEarnedXpFor(client, { userId, eventType, subjectId })) return 0;
+    if (await hasEarnedXpFor(client, { userId, eventType, targetId })) return 0;
 
     // Nunca menos de 1: un evento que puntua siempre tiene que notarse.
     return Math.max(1, Math.round(base * leagueOf(totalXp).multiplier));
@@ -135,15 +135,15 @@ const addToSeason = async (client, { season, userId, xp, league }) => {
  * .code, asi que la transaccion aborta igual, pero el cliente veria "error al registrar la
  * actividad" cuando lo que fallo de verdad fue crear la ruta.
  */
-export const recordActivity = async (client, { userId, eventType, subjectId, ownerId = null, score = null }) => {
+export const recordActivity = async (client, { userId, eventType, targetId, ownerId = null, score = null }) => {
     const stats = await lockUserStats(client, userId);
 
     const xp = await resolveXp(client, {
-        userId, eventType, subjectId, ownerId, score, totalXp: stats.xp,
+        userId, eventType, targetId, ownerId, score, totalXp: stats.xp,
     });
 
     await insertActivityEvent(client, {
-        userId, eventType, subjectId, xp, activityDate: stats.today,
+        userId, eventType, targetId, xp, activityDate: stats.today,
     });
 
     const updated = await applyActivityToStats(client, { userId, xp, day: stats.today });

@@ -2,19 +2,25 @@ import z from 'zod';
 
 const uuid = z.string().uuid("Identificador invalido");
 
+/**
+ * La materia viaja por SLUG, que es su clave primaria. El mismo campo lo usan el listado y el
+ * onboarding, y es lo que permite al cliente mandar 'matematicas' sin conocer ningun uuid.
+ */
+export const subjectSlug = z.string().trim().min(1, "Materia invalida").max(60, "Materia invalida");
+
 export const createRouteSchema = z.object({
     title: z.string().min(3, "El titulo es demasiado corto").max(120, "El titulo es demasiado largo"),
     description: z.string().max(2000, "La descripcion es demasiado larga").optional(),
     // Key de S3 devuelta por POST /uploads/sign, no una URL.
     image: z.string().min(1).optional(),
-    // Exactamente uno y obligatorio: sin subject la ruta no puede entrar en el feed.
-    topicId: uuid,
+    // Exactamente una y obligatoria: sin materia la ruta no puede entrar en el feed.
+    subject: subjectSlug,
 });
 
 export const updateRouteSchema = z.object({
     title: z.string().min(3).max(120).optional(),
     description: z.string().max(2000).optional(),
-    topicId: uuid.optional(),
+    subject: subjectSlug.optional(),
 });
 
 export const updateCoverSchema = z.object({
@@ -36,9 +42,9 @@ const queryBoolean = z.enum(['true', 'false']).transform((value) => value === 't
 
 export const listQuerySchema = z.object({
     mine: queryBoolean.default('false'),
-    // El slug de la materia, no su uuid: el slug es el contrato con el front, que resuelve
-    // banner, icono y tinte a partir de el.
-    topic: z.string().trim().min(1).max(60).optional(),
+    // El slug de la materia: es el contrato con el front, que resuelve banner, icono y tinte
+    // a partir de el.
+    subject: subjectSlug.optional(),
     sort: z.enum(['recent', 'rating']).default('recent'),
     skip: z.coerce.number().int().min(0).default(0),
     take: z.coerce.number().int().min(1).max(50).default(20),

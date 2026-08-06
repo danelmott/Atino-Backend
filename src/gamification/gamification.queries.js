@@ -34,22 +34,22 @@ export const lockUserStats = async (client, userId) => {
 }
 
 /** Solo mira filas con xp > 0: las de 0 XP son las del heatmap y si pueden repetirse. */
-export const hasEarnedXpFor = async (client, { userId, eventType, subjectId }) => {
+export const hasEarnedXpFor = async (client, { userId, eventType, targetId }) => {
     const { rows } = await client.query(
         `SELECT 1 FROM activity_events
-          WHERE user_id = $1 AND event_type = $2 AND subject_id = $3 AND xp > 0`,
-        [userId, eventType, subjectId]
+          WHERE user_id = $1 AND event_type = $2 AND target_id = $3 AND xp > 0`,
+        [userId, eventType, targetId]
     );
 
     return rows.length > 0;
 }
 
-export const insertActivityEvent = async (client, { userId, eventType, subjectId, xp, activityDate }) => {
+export const insertActivityEvent = async (client, { userId, eventType, targetId, xp, activityDate }) => {
     const { rows } = await client.query(
-        `INSERT INTO activity_events (user_id, event_type, subject_id, xp, activity_date)
+        `INSERT INTO activity_events (user_id, event_type, target_id, xp, activity_date)
          VALUES ($1, $2, $3, $4, $5::date)
          RETURNING id, xp, to_char(activity_date, 'YYYY-MM-DD') AS activity_date`,
-        [userId, eventType, subjectId, xp, activityDate]
+        [userId, eventType, targetId, xp, activityDate]
     );
 
     return rows[0];

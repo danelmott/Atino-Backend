@@ -18,7 +18,7 @@ import {
     changeCover,
     changeVisibility,
     remove,
-    topics,
+    subjects,
 } from './routes.controllers.js';
 
 export const routesRouter = Router();
@@ -26,7 +26,9 @@ export const routesRouter = Router();
 //RUTAS PROTEGIDAS POR LA AUTENTICACION
 routesRouter.use(requireAuth);
 
-routesRouter.get('/topics', asyncHandler(topics));
+// Encima de /:id a la fuerza: declarado despues, /routes/subjects entraria por el handler de
+// detalle, fallaria la validacion de uuid y devolveria un 400 en vez del catalogo.
+routesRouter.get('/subjects', asyncHandler(subjects));
 
 routesRouter.post('/', validate(createRouteSchema), asyncHandler(create));
 routesRouter.get('/', validate(listQuerySchema, 'query'), asyncHandler(list));

@@ -21,7 +21,7 @@ gamificationRouter.get('/users/:userId/stats', validate(userIdParamSchema, 'para
 gamificationRouter.get('/users/:userId/activity', validate(userIdParamSchema, 'params'), validate(activityQuerySchema, 'query'), asyncHandler(activity));
 
 // Los segmentos literales van antes que nada que pueda solaparse, misma razon que el
-// /topics de routesRouter.
+// /subjects de routesRouter.
 gamificationRouter.get('/ranking/me', validate(seasonQuerySchema, 'query'), asyncHandler(standing));
 gamificationRouter.get('/ranking/global', validate(rankingQuerySchema, 'query'), asyncHandler(globalRanking));
 gamificationRouter.get('/ranking', validate(seasonQuerySchema, 'query'), asyncHandler(ranking));

@@ -1,5 +1,6 @@
 import z from 'zod';
-import { TOPIC_SELECTION } from './users.services.js';
+import { SUBJECT_SELECTION } from './users.services.js';
+import { subjectSlug } from '../routes/routes.schemas.js';
 
 /**
  * Se valida contra la lista de zonas IANA que conoce el propio Node en vez de con un regex:
@@ -18,15 +19,19 @@ const nameField = z.string().trim().min(2, "El nombre es demasiado corto").max(8
 export const updateProfileSchema = z.object({ name: nameField });
 
 /**
- * Los limites salen de TOPIC_SELECTION en el service para que la regla viva en un solo
- * sitio. El maximo coincide con el de topicIds que ya tenian las rutas.
+ * Los limites salen de SUBJECT_SELECTION en el service para que la regla viva en un solo
+ * sitio. `subjectSlug` se reutiliza del modulo de rutas: es el mismo campo, y dos definiciones
+ * del slug de una materia acabarian divergiendo.
+ *
+ * Son slugs y no uuid: el cliente manda ['matematicas', 'fisica'] tal cual, sin tener que
+ * pedir antes el catalogo para traducir.
  */
-const topicIdsField = z
-    .array(z.string().uuid("Identificador invalido"))
-    .min(TOPIC_SELECTION.min, "Elige al menos una categoria")
-    .max(TOPIC_SELECTION.max, `Como maximo ${TOPIC_SELECTION.max} categorias`);
+const subjectsField = z
+    .array(subjectSlug)
+    .min(SUBJECT_SELECTION.min, "Elige al menos una materia")
+    .max(SUBJECT_SELECTION.max, `Como maximo ${SUBJECT_SELECTION.max} materias`);
 
-export const setTopicsSchema = z.object({ topicIds: topicIdsField });
+export const setSubjectsSchema = z.object({ subjects: subjectsField });
 
 /**
  * El modal de onboarding manda las dos cosas juntas, asi que el schema las exige juntas: sin
@@ -34,7 +39,7 @@ export const setTopicsSchema = z.object({ topicIds: topicIdsField });
  */
 export const completeOnboardingSchema = z.object({
     name: nameField,
-    topicIds: topicIdsField,
+    subjects: subjectsField,
 });
 
 /**

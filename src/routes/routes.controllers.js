@@ -6,7 +6,7 @@ import {
     updateRouteCover,
     setRouteVisibility,
     deleteRoute,
-    getTopics,
+    getSubjects,
 } from './routes.services.js';
 
 export const create = async (req, res) => {
@@ -44,6 +44,6 @@ export const remove = async (req, res) => {
     return res.status(204).send();
 }
 
-export const topics = async (req, res) => {
-    return res.status(200).json({ topics: await getTopics() });
+export const subjects = async (req, res) => {
+    return res.status(200).json({ subjects: await getSubjects() });
 }

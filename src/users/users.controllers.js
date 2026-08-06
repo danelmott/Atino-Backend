@@ -3,7 +3,7 @@ import {
     getPublicProfile,
     updateMyProfile,
     changeTimezone,
-    setMyTopics,
+    setMySubjects,
     completeOnboarding,
     setUserVerified,
     resolveUserId,
@@ -22,8 +22,8 @@ export const timezone = async (req, res) => {
     return res.status(200).json(await changeTimezone(req.user, req.body.timezone));
 }
 
-export const topics = async (req, res) => {
-    return res.status(200).json(await setMyTopics(req.user, req.body.topicIds));
+export const subjects = async (req, res) => {
+    return res.status(200).json(await setMySubjects(req.user, req.body.subjects));
 }
 
 export const onboarding = async (req, res) => {

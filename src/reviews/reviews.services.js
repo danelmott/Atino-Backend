@@ -59,7 +59,7 @@ export const rateRoute = withServiceError(async (user, routeId, rating) => {
         await recordActivity(client, {
             userId: user.userId,
             eventType: 'ROUTE_RATED',
-            subjectId: routeId,
+            targetId: routeId,
         });
 
         // Se relee despues del upsert porque el trigger acaba de recalcular la media.

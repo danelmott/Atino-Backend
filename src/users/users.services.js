@@ -13,17 +13,17 @@ import {
     updateUserTimezone,
     updateUserName,
     updateUserVerified,
-    getUserTopicPreferences,
-    countExistingTopics,
-    replaceUserTopicPreferences,
+    getUserSubjectPreferences,
+    countExistingSubjects,
+    replaceUserSubjectPreferences,
     markOnboardingCompleted,
 } from './users.queries.js';
 
-/** Minimo y maximo de subjects que puede elegir el usuario. El schema deriva de aqui. */
-export const TOPIC_SELECTION = { min: 1, max: 5 };
+/** Minimo y maximo de materias que puede elegir el usuario. El schema deriva de aqui. */
+export const SUBJECT_SELECTION = { min: 1, max: 5 };
 
-const formatTopic = (row) => ({
-    id: row.id,
+/** Sin `id`: el slug es la clave. Mismo objeto que emite formatSubject en el modulo de rutas. */
+const formatSubject = (row) => ({
     slug: row.slug,
     name: row.name,
 });
@@ -77,15 +77,15 @@ export const getMyProfile = withServiceError(async (user) => {
     const row = await findUserProfile(dbConnection, user.userId);
     if (!row) throw { code: 'USER_NOT_FOUND', message: 'No fue posible encontrar el usuario' };
 
-    const [profile, stats, topics] = await Promise.all([
+    const [profile, stats, subjects] = await Promise.all([
         formatProfile(row),
         getUserStats(user.userId),
-        getUserTopicPreferences(dbConnection, user.userId),
+        getUserSubjectPreferences(dbConnection, user.userId),
     ]);
 
     return {
         ...profile,
-        topics: topics.map(formatTopic),
+        subjects: subjects.map(formatSubject),
         xp: stats.xp,
         league: stats.league,
         currentStreak: stats.currentStreak,
@@ -184,19 +184,19 @@ export const updateMyProfile = withServiceError(async (user, { name }) => {
 }, { code: 'ERROR_UPDATING_PROFILE', message: 'Hubo un error al intentar actualizar el perfil' });
 
 /**
- * Los ids se deduplican ANTES de contarlos: [a, a, b] tiene tres elementos pero solo dos
- * topics, y comparar 2 contra 3 rechazaria una peticion perfectamente valida.
+ * Los slugs se deduplican ANTES de contarlos: [a, a, b] tiene tres elementos pero solo dos
+ * materias, y comparar 2 contra 3 rechazaria una peticion perfectamente valida.
  */
-const replaceTopics = async (client, userId, topicIds) => {
-    const unique = [...new Set(topicIds)];
+const replaceSubjects = async (client, userId, subjects) => {
+    const unique = [...new Set(subjects)];
 
-    const existing = await countExistingTopics(client, unique);
+    const existing = await countExistingSubjects(client, unique);
     if (existing !== unique.length) {
-        throw { code: 'TOPIC_NOT_FOUND', message: 'Alguna de las categorias elegidas no existe' };
+        throw { code: 'SUBJECT_NOT_FOUND', message: 'Alguna de las materias elegidas no existe' };
     }
 
-    await replaceUserTopicPreferences(client, userId, unique);
-    return (await getUserTopicPreferences(client, userId)).map(formatTopic);
+    await replaceUserSubjectPreferences(client, userId, unique);
+    return (await getUserSubjectPreferences(client, userId)).map(formatSubject);
 };
 
 /**
@@ -212,7 +212,7 @@ const replaceTopics = async (client, userId, topicIds) => {
  * intereses desde ajustes, un usuario sin nombre completaria el onboarding por la puerta de
  * atras y volveria el problema que este endpoint existe para cerrar.
  */
-export const completeOnboarding = withServiceError(async (user, { name, topicIds }) => {
+export const completeOnboarding = withServiceError(async (user, { name, subjects }) => {
     return withTransaction(async (client) => {
         const updated = await updateUserName(client, { userId: user.userId, name });
         if (!updated) throw { code: 'USER_NOT_FOUND', message: 'No fue posible encontrar el usuario' };
@@ -222,13 +222,13 @@ export const completeOnboarding = withServiceError(async (user, { name, topicIds
         // desde el alta, y ensureUniqueUsername lo reescribe con el nombre que confirmen aqui.
         const username = await ensureUniqueUsername(client, { userId: user.userId, base: name });
 
-        const topics = await replaceTopics(client, user.userId, topicIds);
+        const chosen = await replaceSubjects(client, user.userId, subjects);
         const marked = await markOnboardingCompleted(client, user.userId);
 
         return {
             name: updated.name,
             username,
-            topics,
+            subjects: chosen,
             onboardingCompleted: true,
             onboardingCompletedAt: marked?.onboarding_completed_at ?? null,
         };
@@ -239,11 +239,11 @@ export const completeOnboarding = withServiceError(async (user, { name, topicIds
  * Editar intereses desde ajustes. Reemplazo completo, y deliberadamente NO toca el onboarding:
  * ver completeOnboarding.
  */
-export const setMyTopics = withServiceError(async (user, topicIds) => {
+export const setMySubjects = withServiceError(async (user, subjects) => {
     return withTransaction(async (client) => ({
-        topics: await replaceTopics(client, user.userId, topicIds),
+        subjects: await replaceSubjects(client, user.userId, subjects),
     }));
-}, { code: 'ERROR_UPDATING_TOPICS', message: 'Hubo un error al intentar guardar tus intereses' });
+}, { code: 'ERROR_UPDATING_SUBJECTS', message: 'Hubo un error al intentar guardar tus intereses' });
 
 /**
  * La zona horaria decide donde corta el dia para la racha y para el heatmap, asi que se
