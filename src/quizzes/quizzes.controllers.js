@@ -1,8 +1,8 @@
-import { createQuiz, getQuiz, updateQuiz, deleteQuiz } from './quizzes.services.js';
+import { createQuizzes, getQuiz, updateQuiz, deleteQuiz } from './quizzes.services.js';
 
 export const create = async (req, res) => {
-    const quiz = await createQuiz(req.user, req.params.routeId, req.body);
-    return res.status(201).json({ quiz });
+    const quizzes = await createQuizzes(req.user, req.params.routeId, req.body.quizzes);
+    return res.status(201).json({ quizzes });
 }
 
 export const detail = async (req, res) => {

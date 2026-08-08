@@ -85,36 +85,52 @@ const insertQuestionTree = async (client, quizId, questions) => {
     return created;
 };
 
-export const createQuiz = withServiceError(async (user, routeId, payload) => {
-    const { title, afterLessonId = null, questions } = payload;
+/**
+ * Alta por lotes, todo o nada.
+ *
+ * Aqui nextQuizPosition SI se llama por quiz, al reves que en las lecciones: la posicion es por
+ * ranura y cada quiz puede colgar de una leccion distinta. Dentro de la transaccion, el segundo de
+ * una misma ranura ya ve el insert del primero y saca la posicion correcta.
+ */
+export const createQuizzes = withServiceError(async (user, routeId, quizzes) => {
+    for (const quiz of quizzes) {
+        for (const key of questionKeys(quiz.questions)) await verifyUpload(user, key, 'quiz-question');
+    }
 
-    for (const key of questionKeys(questions)) await verifyUpload(user, key, 'quiz-question');
-
-    const { quiz, rows } = await withTransaction(async (client) => {
+    const created = await withTransaction(async (client) => {
         await assertRouteOwner(client, user, routeId);
-        const slot = await assertLessonSlot(client, afterLessonId, routeId);
+        const inserted = [];
 
-        const created = await insertQuiz(client, {
-            routeId,
-            title,
-            afterLessonId: slot,
-            position: await nextQuizPosition(client, routeId, slot),
-        });
+        for (const { title, afterLessonId = null, questions } of quizzes) {
+            const slot = await assertLessonSlot(client, afterLessonId, routeId);
 
-        const rows = await insertQuestionTree(client, created.id, questions);
+            const quiz = await insertQuiz(client, {
+                routeId,
+                title,
+                afterLessonId: slot,
+                position: await nextQuizPosition(client, routeId, slot),
+            });
 
-        // Ultima sentencia de la transaccion, por el orden de locks: ver recordActivity.
-        await recordActivity(client, {
-            userId: user.userId,
-            eventType: 'QUIZ_CREATED',
-            targetId: created.id,
-        });
+            const rows = await insertQuestionTree(client, quiz.id, questions);
 
-        return { quiz: created, rows };
+            inserted.push({ quiz, rows });
+        }
+
+        /* Los N eventos al final, DESPUES de todos los INSERT: ver la misma nota en
+           createLessons. Intercalarlos rompe el orden de locks que recordActivity protege. */
+        for (const { quiz } of inserted) {
+            await recordActivity(client, {
+                userId: user.userId,
+                eventType: 'QUIZ_CREATED',
+                targetId: quiz.id,
+            });
+        }
+
+        return inserted;
     });
 
-    return formatQuiz(quiz, rows);
-}, { code: 'ERROR_CREATING_QUIZ', message: 'Hubo un error al intentar crear el quiz' });
+    return Promise.all(created.map(({ quiz, rows }) => formatQuiz(quiz, rows)));
+}, { code: 'ERROR_CREATING_QUIZ', message: 'Hubo un error al intentar crear los quizzes' });
 
 export const getQuiz = withServiceError(async (user, quizId) => {
     const quiz = await findQuizWithRoute(dbConnection, quizId);

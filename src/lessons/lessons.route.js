@@ -3,7 +3,7 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { validate } from '../lib/validate.js';
 import { requireAuth } from '../lib/middlewares/auth.js';
 import {
-    createLessonSchema,
+    createLessonsSchema,
     updateLessonSchema,
     reorderSchema,
     idParamSchema,
@@ -18,7 +18,7 @@ export const lessonsRouter = Router();
 //RUTAS PROTEGIDAS POR LA AUTENTICACION
 lessonsRouter.use(requireAuth);
 
-lessonsRouter.post('/routes/:routeId/lessons', validate(routeIdParamSchema, 'params'), validate(createLessonSchema), asyncHandler(create));
+lessonsRouter.post('/routes/:routeId/lessons', validate(routeIdParamSchema, 'params'), validate(createLessonsSchema), asyncHandler(create));
 lessonsRouter.put('/routes/:routeId/lessons/order', validate(routeIdParamSchema, 'params'), validate(reorderSchema), asyncHandler(reorder));
 
 lessonsRouter.get('/lessons/:id', validate(idParamSchema, 'params'), asyncHandler(detail));

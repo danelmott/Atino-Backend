@@ -39,7 +39,20 @@ const lessonBody = z.object({
     }
 });
 
-export const createLessonSchema = lessonBody;
+/**
+ * El alta es por lotes: el cliente arma la ruta entera en un modal y la manda de una.
+ *
+ * El tope de 100 es nuevo -- antes no habia ninguno -- y esta para que un payload desmedido falle
+ * con un mensaje claro en vez de chocar contra el limite de 1mb de express.json, que responde un
+ * 413 generico sin decir que campo sobra.
+ */
+export const createLessonsSchema = z.object({
+    lessons: z
+        .array(lessonBody)
+        .min(1, "Manda al menos una leccion")
+        .max(100, "Como maximo 100 lecciones por peticion"),
+});
+
 export const updateLessonSchema = lessonBody;
 
 export const reorderSchema = z.object({

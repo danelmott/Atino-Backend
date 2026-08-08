@@ -1,8 +1,8 @@
-import { createLesson, getLesson, updateLesson, deleteLesson, reorderLessons } from './lessons.services.js';
+import { createLessons, getLesson, updateLesson, deleteLesson, reorderLessons } from './lessons.services.js';
 
 export const create = async (req, res) => {
-    const lesson = await createLesson(req.user, req.params.routeId, req.body);
-    return res.status(201).json({ lesson });
+    const lessons = await createLessons(req.user, req.params.routeId, req.body.lessons);
+    return res.status(201).json({ lessons });
 }
 
 export const detail = async (req, res) => {

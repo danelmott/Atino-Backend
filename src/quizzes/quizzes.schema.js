@@ -36,7 +36,17 @@ const quizBody = z.object({
         .max(50, "Como maximo 50 preguntas"),
 });
 
-export const createQuizSchema = quizBody;
+/**
+ * El alta es por lotes, igual que la de lecciones: el cliente arma la ruta entera y la manda de una.
+ * El tope de 100 evita chocar contra el limite de 1mb de express.json, que responde un 413 generico.
+ */
+export const createQuizzesSchema = z.object({
+    quizzes: z
+        .array(quizBody)
+        .min(1, "Manda al menos un quiz")
+        .max(100, "Como maximo 100 quizzes por peticion"),
+});
+
 export const updateQuizSchema = quizBody;
 
 export const idParamSchema = z.object({ id: uuid });

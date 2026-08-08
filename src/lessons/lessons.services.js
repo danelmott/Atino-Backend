@@ -53,39 +53,57 @@ const formatLesson = async (lesson, blocks = []) => ({
     blocks: await Promise.all(blocks.map(formatBlock)),
 });
 
-export const createLesson = withServiceError(async (user, routeId, payload) => {
-    const { title, contentType, content, blocks = [] } = payload;
-
+/**
+ * Alta por lotes, todo o nada: o entran las N lecciones o no entra ninguna.
+ *
+ * El orden del array manda. Se pide la siguiente posicion UNA vez y se le suma el indice, en vez de
+ * consultarla por leccion: dentro de la transaccion daria lo mismo -- cada MAX veria el insert
+ * anterior -- pero son N-1 consultas de menos.
+ */
+export const createLessons = withServiceError(async (user, routeId, lessons) => {
     // Fuera de la transaccion: verifyUpload golpea S3 y no debe alargar el lock.
-    for (const key of blockKeys(blocks)) await verifyUpload(user, key, 'lesson-block');
+    for (const lesson of lessons) {
+        for (const key of blockKeys(lesson.blocks)) await verifyUpload(user, key, 'lesson-block');
+    }
 
-    const { lesson, rows } = await withTransaction(async (client) => {
+    const created = await withTransaction(async (client) => {
         await assertRouteOwner(client, user, routeId);
 
-        const created = await insertLesson(client, {
-            routeId,
-            title,
-            contentType,
-            content: contentType === 'PARAGRAPH' ? content : null,
-            position: await nextLessonPosition(client, routeId),
-        });
+        const base = await nextLessonPosition(client, routeId);
+        const inserted = [];
 
-        const inserted = contentType === 'SLIDES'
-            ? await insertLessonBlocks(client, created.id, blocks)
-            : [];
+        for (const [index, { title, contentType, content, blocks = [] }] of lessons.entries()) {
+            const lesson = await insertLesson(client, {
+                routeId,
+                title,
+                contentType,
+                content: contentType === 'PARAGRAPH' ? content : null,
+                position: base + index,
+            });
 
-        // Ultima sentencia de la transaccion, por el orden de locks: ver recordActivity.
-        await recordActivity(client, {
-            userId: user.userId,
-            eventType: 'LESSON_CREATED',
-            targetId: created.id,
-        });
+            const rows = contentType === 'SLIDES'
+                ? await insertLessonBlocks(client, lesson.id, blocks)
+                : [];
 
-        return { lesson: created, rows: inserted };
+            inserted.push({ lesson, rows });
+        }
+
+        /* Los N eventos al final, DESPUES de todos los INSERT. Intercalar uno por leccion tomaria
+           user_stats en medio y volveria a tomar routes despues, que es justo el orden de locks
+           que recordActivity existe para evitar. */
+        for (const { lesson } of inserted) {
+            await recordActivity(client, {
+                userId: user.userId,
+                eventType: 'LESSON_CREATED',
+                targetId: lesson.id,
+            });
+        }
+
+        return inserted;
     });
 
-    return formatLesson(lesson, rows);
-}, { code: 'ERROR_CREATING_LESSON', message: 'Hubo un error al intentar crear la leccion' });
+    return Promise.all(created.map(({ lesson, rows }) => formatLesson(lesson, rows)));
+}, { code: 'ERROR_CREATING_LESSON', message: 'Hubo un error al intentar crear las lecciones' });
 
 export const getLesson = withServiceError(async (user, lessonId) => {
     const lesson = await findLessonWithRoute(dbConnection, lessonId);
